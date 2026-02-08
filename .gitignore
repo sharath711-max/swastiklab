@@ -14,6 +14,8 @@ yarn.lock
 backend/db/*.db
 backend/db/*.sqlite
 backend/db/*.sqlite3
+backend/db/*.db-wal
+backend/db/*.db-shm
 backend/db/init.sql.bak
 
 # Logs
