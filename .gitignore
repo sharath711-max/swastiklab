@@ -18,6 +18,8 @@ backend/db/init.sql.bak
 
 # Logs
 backend/logs/
+backend/uploads/
+!backend/uploads/.gitkeep
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
