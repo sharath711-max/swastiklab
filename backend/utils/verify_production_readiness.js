@@ -69,8 +69,8 @@ async function runProductionReadinessCheck() {
 
     // 3. Rollup Summary Sanity
     console.log('\n--- 3. Repository Logic Verification ---');
-    const GoldCertificateItemRepository = require('../repositories/GoldCertificateItemRepository');
-    const repo = new GoldCertificateItemRepository();
+    const GoldCertificateItemRepository = require('../repositories/goldCertificateItemRepository');
+    const repo = GoldCertificateItemRepository;
     if (typeof repo.createItem === 'function' && typeof repo.getCertificateItems === 'function') {
         console.log('✅ GoldCertificateItemRepository interface verified.');
     } else {

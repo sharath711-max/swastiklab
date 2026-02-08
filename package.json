@@ -12,6 +12,18 @@
     "windows": "run.bat",
     "install-all": "npm install",
     "migrate:phase1": "node backend/utils/migrate_phase1.js",
-    "verify:migration": "node backend/utils/verify_migration.js"
+    "verify:migration": "node backend/utils/verify_migration.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:start:prod": "pm2 start ecosystem.config.js --env production",
+    "pm2:stop": "pm2 stop all",
+    "pm2:restart": "pm2 restart all",
+    "pm2:reload": "pm2 reload all",
+    "pm2:delete": "pm2 delete all",
+    "pm2:logs": "pm2 logs",
+    "pm2:status": "pm2 status",
+    "pm2:monitor": "pm2 monitor",
+    "pm2:save": "pm2 save",
+    "pm2:startup": "pm2 startup",
+    "pm2:unstartup": "pm2 unstartup"
   }
 }

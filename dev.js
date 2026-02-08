@@ -5,6 +5,9 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 
+// Configuration
+const USE_PM2 = process.argv.includes('--pm2') || process.env.USE_PM2 === 'true';
+
 // Colors for console output
 const colors = {
     reset: '\x1b[0m',
@@ -169,6 +172,111 @@ function getLanIp() {
 }
 
 /**
+ * Check if PM2 is available
+ */
+function checkPM2() {
+    if (!USE_PM2) {
+        return false;
+    }
+
+    try {
+        const result = spawnSync('pm2', ['--version'], { 
+            stdio: 'pipe',
+            timeout: 5000 
+        });
+        
+        if (result.status === 0) {
+            const version = result.stdout.toString().trim();
+            log(`✓ PM2 found (v${version})`, colors.green);
+            return true;
+        }
+    } catch (error) {
+        log('⚠  PM2 not found, falling back to standard spawn', colors.yellow);
+    }
+
+    return false;
+}
+
+/**
+ * Start services with PM2
+ */
+function startWithPM2(lanIp) {
+    log('🚀 Using PM2 Process Manager...', colors.cyan);
+
+    try {
+        // Delete any existing processes
+        try {
+            execSync('pm2 delete all', { stdio: 'pipe' });
+        } catch (e) {
+            // Ignore if no processes exist
+        }
+
+        // Start backend with PM2
+        log('🟢 Starting Backend with PM2...', colors.green);
+        execSync('pm2 start ecosystem.config.js', { 
+            stdio: 'pipe',
+            cwd: __dirname
+        });
+
+        // Wait for backend to stabilize
+        setTimeout(() => {
+            log('✓ Backend started via PM2', colors.green);
+            
+            // Display PM2 status
+            console.log('\n');
+            try {
+                execSync('pm2 status', { stdio: 'inherit' });
+            } catch (e) {
+                // Ignore
+            }
+        }, 2000);
+
+        // Display success and instructions
+        setTimeout(() => {
+            console.log('\n\n');
+            log('=================================================', colors.bright + colors.green);
+            log('     ✅ SWASTIK GOLD & SILVER LAB ONLINE         ', colors.bright + colors.green);
+            log('       (Running with PM2 Process Manager)        ', colors.bright + colors.green);
+            log('=================================================', colors.bright + colors.green);
+            console.log('\n');
+
+            log('📡 ACCESS LINKS:', colors.cyan);
+            log(`   Backend API:    http://localhost:5000`, colors.white);
+            log(`   Health Check:   http://localhost:5000/health`, colors.dim);
+            console.log('\n');
+
+            log('🌐 NETWORK ACCESS:', colors.cyan);
+            log(`   Backend API:    http://${lanIp}:5000`, colors.white);
+            console.log('\n');
+
+            log('📊 PM2 MANAGEMENT:', colors.cyan);
+            log(`   View status:    npm run pm2:status`, colors.white);
+            log(`   View logs:      npm run pm2:logs`, colors.white);
+            log(`   Monitor:        npm run pm2:monitor`, colors.white);
+            log(`   Restart:        npm run pm2:restart`, colors.white);
+            log(`   Stop:           npm run pm2:stop`, colors.white);
+            console.log('\n');
+
+            log('🔐 DEFAULT CREDENTIALS:', colors.cyan);
+            log(`   Username: admin`, colors.white);
+            log(`   Password: admin123`, colors.white);
+            console.log('\n');
+
+            log('🛑 TO STOP: Use "npm run pm2:stop" or "pm2 stop all"', colors.yellow);
+            log('=================================================', colors.dim);
+            console.log('\n\n');
+        }, 4000);
+
+        return true;
+
+    } catch (error) {
+        log(`❌ PM2 startup failed: ${error.message}`, colors.red);
+        log('Falling back to standard spawn...', colors.yellow);
+        return false;
+    }
+}
+
+/**
  * Check database initialization
  */
 function checkDatabase() {
@@ -239,6 +347,32 @@ async function start() {
     console.log('\n');
     log('🚀 Step 4: Launching services...', colors.yellow);
     console.log('\n');
+
+    // Check if PM2 is available and use it if enabled
+    if (USE_PM2 && checkPM2()) {
+        startWithPM2(lanIp);
+        
+        // Setup PM2 cleanup handlers
+        function cleanupPM2() {
+            log('\n🔴 Shutting down services...', colors.red);
+            try {
+                execSync('pm2 stop all', { stdio: 'pipe' });
+                execSync('pm2 delete all', { stdio: 'pipe' });
+            } catch (e) {
+                // Ignore
+            }
+            setTimeout(() => process.exit(0), 1000);
+        }
+        
+        process.on('SIGINT', cleanupPM2);
+        process.on('SIGTERM', cleanupPM2);
+        process.on('exit', cleanupPM2);
+        
+        return;
+    }
+
+    // Standard process spawning (fallback or default mode)
+    log('🚀 Using Standard Process Spawning...', colors.cyan);
 
     // Store child process references for cleanup
     const processes = [];
