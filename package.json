@@ -1,0 +1,17 @@
+{
+  "name": "swastik-gold-silver-lab",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "node dev.js",
+    "start": "node backend/app.js",
+    "setup": "run.bat",
+    "windows": "run.bat",
+    "install-all": "npm install",
+    "migrate:phase1": "node backend/utils/migrate_phase1.js",
+    "verify:migration": "node backend/utils/verify_migration.js"
+  }
+}
