@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const GoldCertificateItemRepository = require('../repositories/GoldCertificateItemRepository');
+const GoldCertificateItemRepository = require('../repositories/goldCertificateItemRepository');
 const { ValidationError } = require('../services/certificateCalculationService');
 
 // Repository is already instantiated in the module export
