@@ -174,7 +174,7 @@ function getLanIp() {
 function checkDatabase() {
     log(`🗄️  Step 3: Checking database...`, colors.yellow);
 
-    const dbPath = path.join(__dirname, 'backend', 'db', 'database.sqlite');
+    const dbPath = path.join(__dirname, 'backend', 'db', 'lab.db');
     const dbDir = path.dirname(dbPath);
 
     if (!fs.existsSync(dbDir)) {

@@ -39,7 +39,7 @@ const AppShell = ({ children }) => {
             subItems: [
                 {
                     name: 'Gold Test',
-                    path: '/gold-test',
+                    path: '/workflow?tab=gold',
                     icon: <FaGem />
                 },
                 {
@@ -72,9 +72,20 @@ const AppShell = ({ children }) => {
     ], []);
 
     const isActive = React.useCallback((path, exact = false) => {
+        if (!path) return false;
+
+        // Support query-based nav items like /workflow?tab=gold
+        if (path.includes('?')) {
+            const [basePath, query] = path.split('?');
+            if (location.pathname !== basePath) return false;
+            const expected = new URLSearchParams(query);
+            const current = new URLSearchParams(location.search);
+            return Array.from(expected.entries()).every(([key, value]) => current.get(key) === value);
+        }
+
         if (exact) return location.pathname === path;
         return location.pathname.startsWith(path);
-    }, [location.pathname]);
+    }, [location.pathname, location.search]);
 
     const [expandedMenus, setExpandedMenus] = useState({});
 

@@ -1,12 +1,32 @@
-
 import React, { useState, useEffect } from 'react';
-import { Modal, Button, Table, Form, Alert, Badge, Row, Col } from 'react-bootstrap';
+import { Modal, Button, Table, Form, Alert, Badge, Row, Col, Spinner } from 'react-bootstrap';
 import { toast } from 'react-toastify';
+import { FaCamera, FaCopy, FaPrint } from 'react-icons/fa';
 import api from '../services/api';
-import { FaCamera } from 'react-icons/fa';
 
-// SIMULATION CONSTANT - Change to 'FRONT_DESK' to test restricted access
 const CURRENT_SYSTEM = 'LAB';
+
+const getWeights = (item) => {
+    const total = Number(item.sample_weight || 0);
+    const sampleInput = Number(item.test_weight || 0);
+    const sample = Number.isFinite(sampleInput) && sampleInput > 0 ? sampleInput : total;
+    const net = Math.max(0, total - sample);
+    return { total, sample, net };
+};
+
+const formatDate = (value) => {
+    if (!value) return '-';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
+const escapeHtml = (value) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 
 const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
     const [items, setItems] = useState([]);
@@ -15,150 +35,151 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
     const [includeGst, setIncludeGst] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [photos, setPhotos] = useState({}); // { itemId: File }
+    const [photos, setPhotos] = useState({});
 
     const isSystemReadOnly = CURRENT_SYSTEM !== 'LAB';
     const isModalReadOnly = readOnly || isSystemReadOnly;
 
-    // Determine Type
     const isPhotoCert = test?.type === 'photo_cert' || test?.id?.startsWith('PCR');
     const isGoldTest = test?.type === 'gold' || test?.id?.startsWith('GT');
     const isSilverTest = test?.type === 'silver' || test?.id?.startsWith('ST');
 
+    const currentStatus = test?.status || '';
+    const isTodoStage = currentStatus === 'TODO';
+    const isDoneStage = currentStatus === 'DONE';
+    const nextStatus = currentStatus === 'TODO'
+        ? 'IN_PROGRESS'
+        : currentStatus === 'IN_PROGRESS'
+            ? 'DONE'
+            : null;
+
     useEffect(() => {
-        if (test) {
-            setItems((test.items || []).map(item => ({
-                ...item,
-                purity: item.purity !== undefined ? item.purity : '',
-                returned: item.returned === 1 || item.returned === true,
-                show_kt: item.show_kt === 1 || item.show_kt === true // For Photo Cert
-            })));
-            setModeOfPayment(test.mode_of_payment || 'Cash');
-            setAmount(test.total || 0);
-            setIncludeGst(test.gst === 1);
-            setPhotos({});
-        }
+        if (!test) return;
+
+        setItems((test.items || []).map((item) => ({
+            ...item,
+            purity: item.purity !== undefined && item.purity !== null ? item.purity : '',
+            returned: item.returned === 1 || item.returned === true,
+            show_kt: item.show_kt === 1 || item.show_kt === true
+        })));
+        setModeOfPayment(test.mode_of_payment || 'Cash');
+        setAmount(test.total || 0);
+        setIncludeGst(test.gst === 1);
+        setPhotos({});
+        setError('');
     }, [test]);
 
     const handleItemChange = (index, field, value) => {
         if (isModalReadOnly) return;
-        const newItems = [...items];
-        newItems[index] = { ...newItems[index], [field]: value };
-        setItems(newItems);
+        setItems((prev) => {
+            const next = [...prev];
+            next[index] = { ...next[index], [field]: value };
+            return next;
+        });
     };
 
     const handlePhotoSelect = (itemId, file) => {
-        if (file) {
-            setPhotos(prev => ({ ...prev, [itemId]: file }));
-        }
+        if (isModalReadOnly || !file) return;
+        setPhotos((prev) => ({ ...prev, [itemId]: file }));
     };
 
     const validate = () => {
         for (const item of items) {
-            // Purity Validation (Required for ALL types)
             const purity = parseFloat(item.purity);
             if (isNaN(purity) || purity <= 0 || purity > 100) {
-                return `Invalid purity for item ${item.item_number}. Must be > 0 and <= 100.`;
+                return `Invalid purity for item ${item.item_number || item.item_no || '-'}. Must be > 0 and <= 100.`;
             }
 
-            // Photo Validation (Required for Photo Cert)
             if (isPhotoCert) {
                 const hasNewPhoto = !!photos[item.id];
                 const hasExistingPhoto = !!item.media;
                 if (!hasNewPhoto && !hasExistingPhoto) {
-                    return `Photo is required for item ${item.item_number}.`;
+                    return `Photo is required for item ${item.item_number || item.item_no || '-'}.`;
                 }
             }
         }
-        if (parseFloat(amount) < 0 || amount === '' || amount === null) {
-            return "Invalid amount. Must be >= 0.";
+
+        if (!isTodoStage) {
+            const parsedAmount = parseFloat(amount);
+            if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+                return 'Invalid amount. Must be >= 0.';
+            }
+            if (!modeOfPayment) {
+                return 'Mode of payment is required.';
+            }
         }
+
         return null;
     };
+
+    const getEndpoint = () => {
+        if (isGoldTest) return `/gold-tests/${test.id}/results`;
+        if (isSilverTest) return `/silver-tests/${test.id}/results`;
+        if (isPhotoCert || test?.type?.includes('cert')) return `/certificates/${test.id}/results`;
+        return `/gold-tests/${test.id}/results`;
+    };
+
+    const buildBaseData = () => ({
+        mode_of_payment: modeOfPayment,
+        total: parseFloat(amount || 0),
+        gst: includeGst ? 1 : 0
+    });
 
     const handleSave = async () => {
         const valError = validate();
         if (valError) {
             setError(valError);
-            return;
+            return false;
         }
 
         setLoading(true);
         setError('');
         try {
-            // Determine Endpoint
-            let endpoint = '';
-            if (isGoldTest) endpoint = `/gold-tests/${test.id}/results`;
-            else if (isSilverTest) endpoint = `/silver-tests/${test.id}/results`; // Assuming implementation
-            else if (isPhotoCert) endpoint = `/certificates/${test.id}/results`;
-            else endpoint = `/gold-tests/${test.id}/results`; // Fallback
+            const endpoint = getEndpoint();
+            const baseData = buildBaseData();
 
-            // Prepare Data
-            const baseData = {
-                mode_of_payment: modeOfPayment,
-                total: parseFloat(amount),
-                gst: includeGst ? 1 : 0
-            };
-
-            // If Photo Cert, we handle Photos + Items
             if (isPhotoCert) {
-                // 1. Upload Photos (One by one due to backend limitation)
                 const photoItemIds = Object.keys(photos);
                 for (const itemId of photoItemIds) {
                     const file = photos[itemId];
                     const formData = new FormData();
                     formData.append('photo', file);
-                    // Send minimal data to identify item
-                    const itemData = {
+                    formData.append('data', JSON.stringify({
                         type: 'photo',
                         photo_item_id: itemId,
-                        items: [{ id: itemId }] // context
-                    };
-                    formData.append('data', JSON.stringify(itemData));
+                        items: [{ id: itemId }]
+                    }));
 
                     await api.post(endpoint, formData, {
                         headers: { 'Content-Type': 'multipart/form-data' }
                     });
                 }
 
-                // 2. Update Text Data (Show Kt, Returned, Payment, Purity)
-                const textData = {
+                await api.post(endpoint, {
                     type: 'photo',
                     ...baseData,
-                    items: items.map(i => ({
+                    items: items.map((i) => ({
                         id: i.id,
-                        show_kt: i.show_kt,
-                        returned: i.returned,
-                        purity: i.purity
+                        show_kt: !!i.show_kt,
+                        returned: !!i.returned,
+                        purity: Number(i.purity),
+                        media: i.media || null
                     }))
-                };
-
-                // We send this as JSON in 'data' field because the endpoint expects multipart/form-data usually?
-                // Actually step 72 supports req.body directly IF no file?
-                // Step 72: "if (req.body.data) data = JSON.parse...". "let data = req.body".
-                // So regular JSON post should work if no file.
-                // Wait, endpoint has `upload.single('photo')`.
-                // If I send regular JSON, `req.file` is undefined. `req.body` has JSON.
-                // My backend logic handles `req.body` directly.
-                // So I can send a regular JSON request for the text updates.
-
-                await api.post(endpoint, textData);
-
-                // Regular Gold/Silver Test
+                });
+            } else {
                 await api.post(endpoint, {
                     ...baseData,
-                    items: items.map(i => ({
+                    items: items.map((i) => ({
                         id: i.id,
-                        purity: parseFloat(i.purity),
-                        returned: i.returned,
-                        item_number: i.item_number
+                        purity: Number(i.purity),
+                        returned: !!i.returned,
+                        item_number: i.item_number || i.item_no
                     }))
                 });
             }
 
-            return true; // Indicate success
+            return true;
         } catch (err) {
-            console.error(err);
             setError(err.response?.data?.error || err.message || 'Failed to save results');
             return false;
         } finally {
@@ -166,94 +187,174 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
         }
     };
 
-    const handleFinalize = async () => {
-        if (!window.confirm('Are you sure you want to finalize? This action cannot be undone.')) return;
+    const handleSubmitFlow = async () => {
+        if (!nextStatus) return;
+        const targetLabel = nextStatus === 'IN_PROGRESS' ? 'Tested' : 'Completed';
+        if (!window.confirm(`Submit and move this card to ${targetLabel}?`)) return;
 
-        // 1. Save First
         const saved = await handleSave();
         if (!saved) return;
 
-        // 2. Update Status to DONE
         setLoading(true);
         try {
-            await api.patch(`/workflow/${test.type}/${test.id}/status`, { status: 'DONE' });
-            toast.success('Finalized successfully!');
-            if (onSuccess) onSuccess();
+            await api.patch(`/workflow/${test.type}/${test.id}/status`, { status: nextStatus });
+            toast.success(`Moved to ${targetLabel}`);
+            onSuccess?.();
             onHide();
-        } catch (error) {
-            console.error(error);
-            toast.error('Failed to finalize status');
+        } catch (err) {
+            toast.error(err.response?.data?.error || 'Failed to update workflow status');
         } finally {
             setLoading(false);
         }
     };
 
+    const handleCopy = async () => {
+        if (!test || !items.length) return;
+        try {
+            const lines = [
+                `Customer: ${test.customer_name || '-'}`,
+                `Date: ${formatDate(test.created_at || test.createdon)}`,
+                `Sample Count: ${items.length}`,
+                ''
+            ];
+
+            items.forEach((item, idx) => {
+                const w = getWeights(item);
+                lines.push(
+                    `${idx + 1}. ${item.item_no || item.item_number || '-'} | ${test.customer_name || '-'} | ` +
+                    `Weight: ${w.net > 0 ? `${w.net}g / ${w.sample}g` : `${w.sample}g`} | Purity: ${item.purity || 0}%`
+                );
+            });
+
+            const text = lines.join('\n');
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-9999px';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+            }
+            toast.success('Completed details copied');
+        } catch (_err) {
+            toast.error('Unable to copy completed details');
+        }
+    };
+
+    const printSingle = (item) => {
+        if (!test || !item) return;
+        const printWindow = window.open('', '_blank', 'width=900,height=700');
+        if (!printWindow) return;
+
+        const w = getWeights(item);
+        const weightValue = w.net > 0 ? `${w.net}g / ${w.sample}g` : `${w.sample}g`;
+        const html = `
+            <html>
+            <head><meta charset="utf-8" /><title>Sample Print</title></head>
+            <body style="font-family:Arial,sans-serif;padding:20px;">
+                <div style="max-width:460px;border:1px solid #d1d5db;border-radius:10px;padding:16px;">
+                    <div style="margin-bottom:12px;">${escapeHtml(item.item_no || item.item_number || '-')}</div>
+                    <div style="margin-bottom:12px;">${escapeHtml(test.customer_name || '-')}</div>
+                    <div style="margin-bottom:14px;">${escapeHtml(weightValue)}</div>
+                    <div style="display:inline-block;border:2px solid #111827;border-radius:8px;padding:8px 14px;font-weight:800;font-size:20px;">
+                        ${escapeHtml(item.purity || 0)}%
+                    </div>
+                </div>
+                <script>
+                    window.onload = function () {
+                        setTimeout(function () {
+                            window.print();
+                            window.onafterprint = function () { window.close(); };
+                        }, 100);
+                    };
+                </script>
+            </body>
+            </html>
+        `;
+
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+    };
+
+    const modalTitle = isTodoStage ? 'Add Test Results' : isDoneStage ? 'Completed Details' : 'Payment Details';
+
     return (
-        <Modal show={show} onHide={onHide} size="lg" centered backdrop="static" keyboard={false} className="new-test-modal">
+        <Modal show={show} onHide={onHide} size="xl" centered backdrop="static" keyboard={false} className="new-test-modal">
             <Modal.Header closeButton className="border-0 pb-0">
-                <Modal.Title className="fw-bold">
-                    Testing Actions
-                    <span className="ms-3 fw-normal text-muted fs-6">{test?.customer_name}</span>
-                    {isModalReadOnly && <Badge bg="secondary" className="ms-2">View Only</Badge>}
-                    {isPhotoCert && <Badge bg="info" className="ms-2">Photo Cert</Badge>}
+                <Modal.Title className="fw-bold d-flex align-items-center gap-2">
+                    {modalTitle}
+                    {isModalReadOnly && <Badge bg="secondary">View Only</Badge>}
+                    {isPhotoCert && <Badge bg="info">Photo Cert</Badge>}
                 </Modal.Title>
+                {isDoneStage && (
+                    <Button variant="outline-primary" size="sm" onClick={handleCopy}>
+                        <FaCopy className="me-1" /> Copy
+                    </Button>
+                )}
             </Modal.Header>
+
             <Modal.Body className="pt-3">
-                {/* System Enforcement Message */}
                 {isSystemReadOnly && (
                     <Alert variant="warning" className="mb-3">
-                        Testing actions available on Lab system only.
+                        Testing actions are available on Lab system only.
                     </Alert>
                 )}
-
                 {error && <Alert variant="danger">{error}</Alert>}
 
-                {/* Items List */}
-                <Table responsive bordered hover size="sm" className="mb-4 align-middle">
-                    <thead className="bg-light">
+                <div className="p-3 border rounded mb-3" style={{ background: '#eef9f4' }}>
+                    <Row className="g-2">
+                        <Col md={6}><strong>Customer:</strong> {test?.customer_name || '-'}</Col>
+                        <Col md={6} className="text-md-end"><strong>Date:</strong> {formatDate(test?.created_at || test?.createdon)}</Col>
+                        <Col md={12}><strong>Sample Count:</strong> {items.length}</Col>
+                    </Row>
+                </div>
+
+                <Table responsive bordered hover size="sm" className="mb-3 align-middle">
+                    <thead className="table-light">
                         <tr>
-                            <th>Item</th>
-                            <th>Type</th>
-                            <th style={{ width: '100px' }}>Purity % <span className="text-danger">*</span></th>
-                            {isPhotoCert ? (
-                                <>
-                                    <th style={{ width: '150px' }}>Photo <span className="text-danger">*</span></th>
-                                    <th style={{ width: '100px' }} className="text-center">Show Kt?</th>
-                                </>
-                            ) : (
-                                <>
-                                    <th style={{ width: '100px' }}>Total Wt</th>
-                                    <th style={{ width: '100px' }}>Sample Wt</th>
-                                </>
-                            )}
-                            <th style={{ width: '100px' }} className="text-center">Returned?</th>
+                            <th>Seq</th>
+                            <th>Item Name</th>
+                            <th>Sample Wt</th>
+                            <th>Total Wt</th>
+                            <th>Net Wt</th>
+                            <th>Purity (%)</th>
+                            {isPhotoCert && <th>Photo</th>}
+                            {isPhotoCert && <th>KT</th>}
+                            <th>Returned</th>
+                            {isDoneStage && <th>Print</th>}
                         </tr>
                     </thead>
                     <tbody>
-                        {items.map((item, idx) => (
-                            <tr key={item.id}>
-                                <td>{item.item_number}</td>
-                                <td>{item.item_type}</td>
-
-                                <td>
-                                    <Form.Control
-                                        size="sm"
-                                        type="number"
-                                        step="0.01"
-                                        min="0.01"
-                                        max="100"
-                                        value={item.purity}
-                                        onChange={(e) => handleItemChange(idx, 'purity', e.target.value)}
-                                        disabled={isModalReadOnly}
-                                        isInvalid={
-                                            item.purity !== '' &&
-                                            (item.purity <= 0 || item.purity > 100)
-                                        }
-                                    />
-                                </td>
-
-                                {isPhotoCert ? (
-                                    <>
+                        {items.map((item, idx) => {
+                            const w = getWeights(item);
+                            return (
+                                <tr key={item.id || idx}>
+                                    <td>{idx + 1}</td>
+                                    <td>
+                                        <div>{item.item_type || '-'}</div>
+                                        <small className="text-muted">{item.item_no || item.item_number || '-'}</small>
+                                    </td>
+                                    <td>{w.sample}g</td>
+                                    <td>{w.total}g</td>
+                                    <td>{w.net}g</td>
+                                    <td style={{ minWidth: 120 }}>
+                                        <Form.Control
+                                            size="sm"
+                                            type="number"
+                                            step="0.01"
+                                            min="0.01"
+                                            max="100"
+                                            value={item.purity}
+                                            onChange={(e) => handleItemChange(idx, 'purity', e.target.value)}
+                                            disabled={isModalReadOnly}
+                                        />
+                                    </td>
+                                    {isPhotoCert && (
                                         <td>
                                             <div className="d-flex align-items-center gap-2">
                                                 {(photos[item.id] || item.media) && (
@@ -266,53 +367,76 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                                                     </div>
                                                 )}
                                                 {!isModalReadOnly && (
-                                                    <label className="btn btn-sm btn-outline-secondary p-1">
+                                                    <label className="btn btn-sm btn-outline-secondary p-1 mb-0">
                                                         <FaCamera />
                                                         <input
                                                             type="file"
                                                             accept="image/*"
                                                             hidden
-                                                            onChange={(e) => handlePhotoSelect(item.id, e.target.files[0])}
+                                                            onChange={(e) => handlePhotoSelect(item.id, e.target.files?.[0])}
                                                         />
                                                     </label>
                                                 )}
                                             </div>
                                         </td>
+                                    )}
+                                    {isPhotoCert && (
                                         <td className="text-center">
                                             <Form.Check
-                                                checked={item.show_kt}
+                                                checked={!!item.show_kt}
                                                 onChange={(e) => handleItemChange(idx, 'show_kt', e.target.checked)}
                                                 disabled={isModalReadOnly}
                                             />
                                         </td>
-                                    </>
-                                ) : (
-                                    <>
-                                        <td>{item.sample_weight}</td>
-                                        <td>{item.test_weight || item.sample_weight}</td>
-                                    </>
-                                )}
-
-                                <td className="text-center">
-                                    <Form.Check
-                                        type="switch"
-                                        checked={item.returned}
-                                        onChange={(e) => handleItemChange(idx, 'returned', e.target.checked)}
-                                        disabled={isModalReadOnly}
-                                    />
+                                    )}
+                                    <td className="text-center">
+                                        <Form.Check
+                                            type="switch"
+                                            checked={!!item.returned}
+                                            onChange={(e) => handleItemChange(idx, 'returned', e.target.checked)}
+                                            disabled={isModalReadOnly}
+                                        />
+                                    </td>
+                                    {isDoneStage && (
+                                        <td>
+                                            <Button variant="outline-secondary" size="sm" onClick={() => printSingle(item)}>
+                                                <FaPrint />
+                                            </Button>
+                                        </td>
+                                    )}
+                                </tr>
+                            );
+                        })}
+                        {items.length === 0 && (
+                            <tr>
+                                <td colSpan={isPhotoCert ? (isDoneStage ? 10 : 9) : (isDoneStage ? 8 : 7)} className="text-center text-muted py-4">
+                                    No sample items found for this card.
                                 </td>
                             </tr>
-                        ))}
+                        )}
                     </tbody>
                 </Table>
 
-                {/* Payment Details Section */}
-                {CURRENT_SYSTEM === 'LAB' && (
+                {!isTodoStage && (
                     <div className="p-3 border rounded bg-white shadow-sm">
                         <Row className="g-3 align-items-end">
                             <Col md={4}>
                                 <Form.Group>
-                                    <Form.Label className="small fw-bold text-muted">Mode of Payment</Form.Label>
+                                    <Form.Label className="small fw-bold text-muted">Amount</Form.Label>
+                                    <Form.Control
+                                        size="sm"
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        value={amount}
+                                        onChange={(e) => setAmount(e.target.value)}
+                                        disabled={isModalReadOnly}
+                                    />
+                                </Form.Group>
+                            </Col>
+                            <Col md={4}>
+                                <Form.Group>
+                                    <Form.Label className="small fw-bold text-muted">Mode</Form.Label>
                                     <Form.Select
                                         size="sm"
                                         value={modeOfPayment}
@@ -323,21 +447,6 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                                         <option value="UPI">UPI</option>
                                         <option value="Balance">Balance</option>
                                     </Form.Select>
-                                </Form.Group>
-                            </Col>
-                            <Col md={4}>
-                                <Form.Group>
-                                    <Form.Label className="small fw-bold text-muted">Test Amount (₹)</Form.Label>
-                                    <Form.Control
-                                        size="sm"
-                                        type="number"
-                                        min="0"
-                                        step="0.01"
-                                        value={amount}
-                                        onChange={(e) => setAmount(e.target.value)}
-                                        disabled={isModalReadOnly}
-                                        isInvalid={parseFloat(amount) < 0}
-                                    />
                                 </Form.Group>
                             </Col>
                             <Col md={4}>
@@ -354,38 +463,27 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                         </Row>
                     </div>
                 )}
-
             </Modal.Body>
+
             <Modal.Footer className="border-0">
-                <Button variant="secondary" onClick={onHide}>Close</Button>
+                <Button variant="secondary" onClick={onHide}>Cancel</Button>
                 {!isModalReadOnly && (
                     <>
                         <Button
                             variant="primary"
-                            onClick={() => handleSave().then(success => success && toast.success('Saved draft'))}
+                            onClick={() => handleSave().then((ok) => ok && toast.success('Saved'))}
                             disabled={loading}
-                            className="px-4 me-2"
                         >
-                            {loading ? 'Saving...' : 'Save Draft'}
+                            {loading ? <Spinner animation="border" size="sm" /> : 'Save'}
                         </Button>
-                        <Button
-                            variant="success"
-                            onClick={handleFinalize}
-                            disabled={loading}
-                            className="px-4"
-                        >
-                            Finalize & Complete
-                        </Button>
+                        {nextStatus && (
+                            <Button variant="success" onClick={handleSubmitFlow} disabled={loading}>
+                                {nextStatus === 'IN_PROGRESS' ? 'Submit to Tested' : 'Submit to Completed'}
+                            </Button>
+                        )}
                     </>
                 )}
             </Modal.Footer>
-
-            <style>{`
-                .new-test-modal .modal-content {
-                    border-radius: 12px;
-                    border: none;
-                }
-            `}</style>
         </Modal>
     );
 };

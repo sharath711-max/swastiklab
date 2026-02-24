@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Container, Row, Col, Card, Badge, Button, Spinner, Dropdown, DropdownButton, ButtonGroup, Modal } from 'react-bootstrap';
+import { Container, Row, Col, Card, Badge, Button, Spinner, Dropdown, DropdownButton, ButtonGroup } from 'react-bootstrap';
 import { toast, ToastContainer } from 'react-toastify';
 import api from '../services/api';
 import NewGoldTestModal from '../components/NewGoldTestModal';
@@ -21,8 +21,6 @@ const WorkflowBoard = () => {
 
     // Phase 2 Modal State
     const [phase2Modal, setPhase2Modal] = useState({ show: false, test: null, readOnly: false });
-    // Generic Read Only Modal State (for TODO)
-    const [summaryModal, setSummaryModal] = useState({ show: false, item: null });
 
     // Sync activeTab with URL query param 'tab'
     useEffect(() => {
@@ -49,13 +47,19 @@ const WorkflowBoard = () => {
         fetchData();
     }, []);
 
-    const updateStatus = async (type, id, newStatus) => {
-        try {
-            await api.patch(`/workflow/${type}/${id}/status`, { status: newStatus });
-            toast.success(`Moved to ${newStatus}`);
-            fetchData();
-        } catch (error) {
-            toast.error('Failed to update status');
+    const openModalForItem = (item, details) => {
+        const payload = { ...details, type: item.type, status: item.status };
+
+        // Photo certificate should allow photo upload/edit in any phase.
+        if (item.type === 'photo_cert') {
+            setPhase2Modal({ show: true, test: payload, readOnly: false });
+            return;
+        }
+
+        if (item.status === 'TODO' || item.status === 'IN_PROGRESS') {
+            setPhase2Modal({ show: true, test: payload, readOnly: false });
+        } else if (item.status === 'DONE') {
+            setPhase2Modal({ show: true, test: payload, readOnly: true });
         }
     };
 
@@ -81,21 +85,12 @@ const WorkflowBoard = () => {
                 return;
             }
 
-            // Inject type info so Phase2Modal knows what to render
-            details.type = item.type;
-
-            if (item.status === 'TODO') {
-                setSummaryModal({ show: true, item: details });
-            } else if (item.status === 'IN_PROGRESS') {
-                setPhase2Modal({ show: true, test: details, readOnly: false });
-            } else if (item.status === 'DONE') {
-                setPhase2Modal({ show: true, test: details, readOnly: true });
-            }
+            openModalForItem(item, details);
         } catch (error) {
             console.error(error);
-            toast.error("Failed to load details");
-            // If failed, maybe fallback to print view if it was a navigation error? 
-            // navigate(`/print/${item.type}-test/${item.id}`);
+            // Open modal with available card data even if detail fetch fails.
+            openModalForItem(item, item);
+            toast.error("Opened with limited data (detail fetch failed)");
         }
     };
 
@@ -282,22 +277,6 @@ const WorkflowBoard = () => {
                                                 <Badge bg="light" text="dark" className="border fw-normal">
                                                     {getTypeLabel(item.type)}
                                                 </Badge>
-
-                                                {/* Action Buttons (Mini) */}
-                                                <div className="d-flex gap-1" onClick={(e) => e.stopPropagation()}>
-                                                    {col.id === 'TODO' && (
-                                                        <Button variant="outline-primary" size="sm" className="py-0 px-2" style={{ fontSize: '0.7rem' }}
-                                                            onClick={() => updateStatus(item.type, item.id, 'IN_PROGRESS')}>
-                                                            Testing
-                                                        </Button>
-                                                    )}
-                                                    {col.id === 'IN_PROGRESS' && (
-                                                        <Button variant="outline-success" size="sm" className="py-0 px-2" style={{ fontSize: '0.7rem' }}
-                                                            onClick={() => updateStatus(item.type, item.id, 'DONE')}>
-                                                            Ready
-                                                        </Button>
-                                                    )}
-                                                </div>
                                             </div>
                                         </Card.Body>
                                     </Card>
@@ -394,45 +373,7 @@ const WorkflowBoard = () => {
                 readOnly={phase2Modal.readOnly}
                 onHide={() => setPhase2Modal({ ...phase2Modal, show: false })}
                 onSuccess={fetchData}
-            // If I add a 'readOnly' prop to Phase2Modal, I need to implement it in Phase2Modal.js
-            // I checked Phase2Modal.js and used `CURRENT_SYSTEM !== 'LAB'` for read-only.
-            // But I also want to enforce read-only for DONE status regardless of system.
-            // The current Phase2Modal only checks SYSTEM. I should pass a prop `readOnlyOverride` or something.
-            // I will add a `readOnly` prop support to Phase2Modal in next step.
             />
-
-            {/* Simple Intake Summary Modal */}
-            <Modal show={summaryModal.show} onHide={() => setSummaryModal({ show: false, item: null })}>
-                <Modal.Header closeButton>
-                    <Modal.Title>Intake Summary (Read Only)</Modal.Title>
-                </Modal.Header>
-                <Modal.Body>
-                    {summaryModal.item && (
-                        <div>
-                            <h5>Customer: {summaryModal.item.customer_name}</h5>
-                            {/* Hidden Internal ID */}
-                            <hr />
-                            <h6>Items</h6>
-                            <ul className="list-group">
-                                {summaryModal.item.items && summaryModal.item.items.map(i => (
-                                    <li key={i.id} className="list-group-item d-flex justify-content-between">
-                                        <span>{i.item_type} ({i.item_no})</span>
-                                        <span>{i.sample_weight}g / {i.test_weight}g</span>
-                                    </li>
-                                ))}
-                            </ul>
-                            <div className="mt-3 text-end">
-                                <Badge bg="primary">{summaryModal.item.status}</Badge>
-                            </div>
-                        </div>
-                    )}
-                </Modal.Body>
-                <Modal.Footer>
-                    <Button variant="secondary" onClick={() => setSummaryModal({ show: false, item: null })}>
-                        Close
-                    </Button>
-                </Modal.Footer>
-            </Modal>
 
         </Container>
     );

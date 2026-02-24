@@ -22,8 +22,11 @@ export const Toast = ({ message, type = 'info', duration = 3000, onClose }) => {
 };
 
 // 2. Salesforce Modal Component
-export const Modal = ({ isOpen, onClose, title, children, size = 'medium', dark = false }) => {
-    if (!isOpen) return null;
+export const Modal = ({ isOpen, show, onClose, onHide, title, children, size = 'medium', dark = false }) => {
+    const isModalOpen = typeof isOpen === 'boolean' ? isOpen : !!show;
+    const handleClose = onClose || onHide || (() => { });
+
+    if (!isModalOpen) return null;
 
     const sizeClasses = {
         small: 'max-w-md',
@@ -37,7 +40,7 @@ export const Modal = ({ isOpen, onClose, title, children, size = 'medium', dark 
             <div className={`modal-content ${sizeClasses[size] || ''}`}>
                 <div className="modal-header">
                     <h2 className="modal-title">{title}</h2>
-                    <button className="modal-close" onClick={onClose}>×</button>
+                    <button className="modal-close" onClick={handleClose}>×</button>
                 </div>
                 <div className="modal-body">
                     {children}

@@ -1,4 +1,7 @@
 @echo off
+setlocal
+chcp 65001 >nul
+:start
 REM ================================================
 REM Swastik Gold & Silver Lab - Windows Launcher
 REM ================================================

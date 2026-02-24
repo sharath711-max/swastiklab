@@ -55,8 +55,8 @@ export const LiveStats = () => {
 // Quick Actions Panel
 export const QuickActions = ({ navigate }) => {
     const actions = [
-        { icon: <FaPlus />, label: 'New Gold Test', onClick: () => navigate('/gold-tests') },
-        { icon: <FaCoins />, label: 'New Silver Test', onClick: () => navigate('/silver-tests') },
+        { icon: <FaPlus />, label: 'New Gold Test', onClick: () => navigate('/workflow?tab=gold') },
+        { icon: <FaCoins />, label: 'New Silver Test', onClick: () => navigate('/workflow?tab=silver') },
         { icon: <FaUserPlus />, label: 'Add Customer', onClick: () => navigate('/customers') },
         { icon: <FaCertificate />, label: 'Certificates', onClick: () => navigate('/certificates') },
 

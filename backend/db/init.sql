@@ -4,9 +4,7 @@ PRAGMA synchronous = NORMAL;
 
 -- 👤 USERS (Single login)
 -- 👤 USERS (Single login)
-DROP TABLE IF EXISTS photo_certificate_item;
-DROP TABLE IF EXISTS photo_certificate;
-DROP TABLE IF EXISTS users;
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,

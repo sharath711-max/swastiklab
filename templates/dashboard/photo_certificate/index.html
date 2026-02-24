@@ -794,8 +794,13 @@
         let paymentSubmitSpinner = $('#paymentSubmitSpinner');
         let paymentTestId = null;
 
-        $(document).on('click', '.pendingTest', function () {
-            paymentTestId = parseInt($(this).attr('data-test-id'));
+        $(document).on('click', '#tested .card[data-status="pending"]', function (e) {
+            if ($(e.target).closest('.card-actions, .dropdown-menu').length) return;
+            const card = $(this);
+            const inlineId = card.find('.pendingTest').first().attr('data-test-id');
+            const fallbackId = (card.attr('id') || '').replace('test_', '');
+            paymentTestId = parseInt(inlineId || fallbackId);
+            if (!Number.isFinite(paymentTestId)) return;
             $.ajax({
                 type: 'GET',
                 url: `{{ url_for('api.photo_certificate.crud') }}${paymentTestId}/`,
@@ -975,8 +980,13 @@
         let completedModal = $("#completedModal");
         let completedTestId = null;
 
-        $(document).on('click', '.completedTest', function () {
-            completedTestId = parseInt($(this).attr('data-test-id'));
+        $(document).on('click', '#completed .card[data-status="completed"]', function (e) {
+            if ($(e.target).closest('.card-actions, .dropdown-menu').length) return;
+            const card = $(this);
+            const inlineId = card.find('.completedTest').first().attr('data-test-id');
+            const fallbackId = (card.attr('id') || '').replace('test_', '');
+            completedTestId = parseInt(inlineId || fallbackId);
+            if (!Number.isFinite(completedTestId)) return;
             $.ajax({
                 type: 'GET',
                 url: `{{ url_for('api.photo_certificate.crud') }}${completedTestId}/`,
