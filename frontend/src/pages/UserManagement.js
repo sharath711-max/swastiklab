@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Table, Button, Modal, Form, Spinner } from 'react-bootstrap';
-import { toast, ToastContainer } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 import api from '../services/api';
 
 const UserManagement = () => {
+    const { addToast } = useToast();
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedUser, setSelectedUser] = useState(null);
@@ -20,7 +21,7 @@ const UserManagement = () => {
             const response = await api.get('/auth/users');
             setUsers(response.data);
         } catch (error) {
-            toast.error('Failed to load users');
+            addToast('Failed to load users', 'error');
         } finally {
             setLoading(false);
         }
@@ -35,17 +36,17 @@ const UserManagement = () => {
     const handlePasswordReset = async (e) => {
         e.preventDefault();
         if (!newPassword || newPassword.length < 6) {
-            toast.error('Password must be at least 6 characters');
+            addToast('Password must be at least 6 characters', 'error');
             return;
         }
 
         setProcessing(true);
         try {
             await api.post(`/auth/users/${selectedUser.id}/reset-password`, { newPassword });
-            toast.success(`Password reset for ${selectedUser.username}`);
+            addToast(`Password reset for ${selectedUser.username}`, 'success');
             setShowResetModal(false);
         } catch (error) {
-            toast.error(error.response?.data?.error || 'Failed to reset password');
+            addToast(error.response?.data?.error || 'Failed to reset password', 'error');
         } finally {
             setProcessing(false);
         }
@@ -56,10 +57,10 @@ const UserManagement = () => {
 
         try {
             await api.put(`/auth/users/${user.id}/role`, { role: newRole });
-            toast.success('Role updated');
+            addToast('Role updated', 'success');
             fetchUsers(); // Refresh list
         } catch (error) {
-            toast.error('Failed to update role');
+            addToast('Failed to update role', 'error');
         }
     };
 
@@ -67,7 +68,6 @@ const UserManagement = () => {
 
     return (
         <Container fluid className="py-4">
-            <ToastContainer />
             <div className="d-flex justify-content-between align-items-center mb-4">
                 <h2>User Management</h2>
                 <Button variant="primary" onClick={fetchUsers}>Refresh</Button>

@@ -2,15 +2,24 @@ const express = require('express');
 const router = express.Router();
 const silverTestService = require('../services/silverTestService');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { immutabilityGuard } = require('../middleware/immutabilityGuard');
 
 router.use(authMiddleware);
+router.use('/:id', immutabilityGuard('silver_test'));
+
+const handleError = (res, error) => {
+    if (error.message.startsWith('409')) {
+        return res.status(409).json({ success: false, error: error.message.replace('409: ', '') });
+    }
+    res.status(400).json({ success: false, error: error.message });
+};
 
 router.post('/', async (req, res) => {
     try {
         const result = await silverTestService.createTest(req.body);
         res.status(201).json({ success: true, data: result });
     } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        handleError(res, error);
     }
 });
 
@@ -30,7 +39,6 @@ router.get('/', async (req, res) => {
     }
 });
 
-// GET /api/silver-tests/:id
 router.get('/:id', async (req, res) => {
     try {
         const test = await silverTestService.getTestDetails(req.params.id);
@@ -40,34 +48,50 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-// POST /api/silver-tests/:id/finalize
+router.patch('/:id/status', async (req, res) => {
+    try {
+        const { status } = req.body;
+        await silverTestService.updateStatus(req.params.id, status);
+        res.json({ success: true, message: 'Status updated' });
+    } catch (error) {
+        handleError(res, error);
+    }
+});
+
 router.post('/:id/finalize', async (req, res) => {
     try {
         const result = await silverTestService.finalizeTest(req.params.id, req.body);
         res.json({ success: true, data: result });
     } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        handleError(res, error);
     }
 });
 
-// POST /api/silver-tests/:id/results
 router.post('/:id/results', async (req, res) => {
     try {
         const result = await silverTestService.saveTestResults(req.params.id, req.body);
         res.json({ success: true, data: result });
     } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        handleError(res, error);
     }
 });
 
-// PUT /api/silver-tests/:id/items/:itemId
 router.put('/:id/items/:itemId', async (req, res) => {
     try {
         const { id, itemId } = req.params;
         const result = await silverTestService.updateItem(id, itemId, req.body);
         res.json({ success: true, message: 'Item updated successfully', data: result });
     } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        handleError(res, error);
+    }
+});
+
+router.delete('/:id', async (req, res) => {
+    try {
+        await silverTestService.deleteTest(req.params.id);
+        res.json({ success: true, message: 'Record deleted' });
+    } catch (error) {
+        handleError(res, error);
     }
 });
 

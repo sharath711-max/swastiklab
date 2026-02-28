@@ -5,84 +5,15 @@ const customerRepository = require('../repositories/customerRepository');
 const billingService = require('./billingService');
 const Decimal = require('decimal.js');
 const { ValidationError } = require('../utils/errors');
+const CertificateCalculationService = require('./certificateCalculationService');
 
 class CertificateService {
     calculateGoldItem(input) {
-        const {
-            gross_weight,
-            test_weight = 0,
-            purity,
-            rate_per_gram = 0,
-            is_returned = false
-        } = input;
-
-        // Validation
-        const errors = [];
-        if (gross_weight === undefined || gross_weight === null) errors.push('Weight is required'); // checking undefined null
-        if (gross_weight < 0) errors.push('Gross weight cannot be negative');
-        if (test_weight < 0) errors.push('Test weight cannot be negative');
-        if (test_weight > gross_weight && gross_weight > 0) errors.push('Test weight cannot exceed gross weight');
-        if (purity < 0 || purity > 100) errors.push('Purity must be between 0 and 100%');
-
-        if (errors.length > 0) {
-            throw new ValidationError('Validation failed', errors);
-        }
-
-        const gross = new Decimal(gross_weight || 0);
-        const test = new Decimal(test_weight || 0);
-        const purityDec = new Decimal(purity || 0);
-        const rate = new Decimal(rate_per_gram || 0);
-
-        const net_weight = gross.minus(test);
-        const fine_weight = net_weight
-            .times(purityDec.div(100))
-            .toDecimalPlaces(3);
-
-        const item_total = net_weight
-            .times(purityDec.div(100))
-            .times(rate)
-            .toDecimalPlaces(2);
-
-        return {
-            gross_weight: gross.toNumber(),
-            test_weight: test.toNumber(),
-            net_weight: net_weight.toNumber(),
-            purity: purityDec.toNumber(),
-            rate_per_gram: rate.toNumber(),
-            fine_weight: fine_weight.toNumber(),
-            item_total: is_returned ? 0 : item_total.toNumber()
-        };
+        return CertificateCalculationService.calculateGoldItem(input);
     }
 
     calculateSilverItem(input) {
-        // Silver usually just needs gross weight, purity, maybe test weight logic too.
-        // Assuming simple gross - test = net.
-        const {
-            gross_weight,
-            test_weight = 0,
-            purity,
-            is_returned = false
-        } = input;
-
-        const gross = new Decimal(gross_weight || 0);
-        const test = new Decimal(test_weight || 0);
-        const purityDec = new Decimal(purity || 0);
-
-        const net_weight = gross.minus(test); // if testing involves removal?
-
-        // item_total for silver might be fee based or value based?
-        // Schema has item_total.
-        // If user provided input.item_total, use it, else calculate 0?
-        // Usually silver testing is per piece fee.
-
-        return {
-            gross_weight: gross.toNumber(),
-            test_weight: test.toNumber(),
-            net_weight: net_weight.toNumber(),
-            purity: purityDec.toNumber(),
-            item_total: input.item_total || 0, // Fee or value? 
-            is_returned: is_returned
-        };
+        return CertificateCalculationService.calculateSilverItem(input);
     }
 
     async generateCertificate(data) {
@@ -100,9 +31,17 @@ class CertificateService {
             } else if (type === 'silver') {
                 const calcs = this.calculateSilverItem(item);
                 return { ...item, ...calcs };
-            } else {
-                return item; // photo items
+            } else if (type === 'photo') {
+                const bill = billingService.calculateCertificateBill(1, gst);
+                return {
+                    ...item,
+                    item_total: bill.netAmount,
+                    gross_weight: parseFloat(item.gross_weight || item.weight || 0),
+                    test_weight: parseFloat(item.test_weight || 0),
+                    purity: parseFloat(item.purity || 0)
+                };
             }
+            return item;
         });
 
         // 3. Dispatch to Repo
@@ -183,10 +122,11 @@ class CertificateService {
                 }
             }
             return { success: true };
-        } else if (type === 'gold' || type === 'silver') {
-            // Forward to existing logic if needed or impl specific
-            // For now assume only photo cert needs this via this service
-            throw new Error('Update not implemented for this type via certificateService');
+        } else if (type === 'silver') {
+            return silverCertificateRepository.updateResults(id, data);
+        } else if (type === 'gold') {
+            // Forward to existing logic if needed
+            throw new Error('Update not implemented for gold via certificateService');
         }
 
         return { success: false, error: 'Unknown type' };

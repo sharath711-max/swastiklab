@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Modal, Button, Form, Row, Col, InputGroup, ListGroup, Badge } from 'react-bootstrap';
 import { FaPlus, FaTrash, FaSearch } from 'react-icons/fa';
 import api from '../services/api';
-import { toast } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 import NewCustomerModal from './NewCustomerModal';
 
 const emptyDraft = {
     item: '',
+    grossWeight: '',
     sampleWeight: '',
-    netWeight: '',
+    netWeight: 0,
     returned: false
 };
 
@@ -25,14 +26,14 @@ const toFixedNumber = (value, digits) => {
 };
 
 const deriveWeights = (draft) => {
-    const sampleWeight = parseWeight(draft.sampleWeight);
-    const netWeight = parseWeight(draft.netWeight);
-    const normalizedNet = netWeight === null ? 0 : netWeight;
-    const totalWeight = sampleWeight !== null ? sampleWeight + normalizedNet : null;
-    return { sampleWeight, totalWeight, netWeight: normalizedNet };
+    const gross = parseWeight(draft.grossWeight) || 0;
+    const sample = parseWeight(draft.sampleWeight) || 0;
+    const net = Math.max(0, toFixedNumber(gross - sample, 3));
+    return { gross, sample, net };
 };
 
 const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
+    const { addToast } = useToast();
     const [searchTerm, setSearchTerm] = useState('');
     const [customers, setCustomers] = useState([]);
     const [filteredCustomers, setFilteredCustomers] = useState([]);
@@ -44,6 +45,7 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
     const [sampleItems, setSampleItems] = useState([]);
     const [loading, setLoading] = useState(false);
     const [showCustomerModal, setShowCustomerModal] = useState(false);
+    const [errors, setErrors] = useState({});
 
     const currentDate = new Date().toLocaleDateString('en-US');
 
@@ -82,7 +84,7 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
             const data = Array.isArray(res.data) ? res.data : (res.data.data || []);
             setCustomers(data);
         } catch (_error) {
-            toast.error('Unable to load customers');
+            addToast('Unable to load customers', 'error');
         }
     };
 
@@ -92,6 +94,7 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
         setSelectedCustomer(null);
         setSampleDraft(emptyDraft);
         setSampleItems([]);
+        setErrors({});
     };
 
     const customerDisplay = (customer) => {
@@ -114,53 +117,43 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
     };
 
     const handleWeightFieldInput = (field, value) => {
-        setSampleDraft((prev) => {
-            const next = { ...prev, [field]: value };
-            const parsedNet = parseWeight(next.netWeight);
-            return {
-                ...next,
-                returned: Number(parsedNet) > 0
-            };
-        });
+        setSampleDraft((prev) => ({ ...prev, [field]: value }));
     };
 
-    const handleWeightFieldBlur = (field) => {
-        setSampleDraft((prev) => {
-            const parsed = parseWeight(prev[field]);
-            if (parsed === null) return prev;
-            return { ...prev, [field]: parsed.toFixed(3) };
-        });
-    };
 
-    const toggleReturned = () => {
-        // Returned is controlled by net weight rule:
-        // net > 0 => true, net <= 0 => false
-    };
 
     const addSampleToList = () => {
         const item = sampleDraft.item.trim();
-        const derived = deriveWeights(sampleDraft);
-        const sampleWtRaw = derived.sampleWeight;
-        const totalWtRaw = derived.totalWeight !== null ? derived.totalWeight : 0;
-        const netWtRaw = derived.netWeight;
-        const sampleWt = toFixedNumber(sampleWtRaw, 3);
-        const totalWt = toFixedNumber(totalWtRaw, 3);
-        const netWt = toFixedNumber(netWtRaw, 3);
+        const { gross, sample, net } = deriveWeights(sampleDraft);
 
-        if (!item || sampleWt === null || totalWt === null || netWt === null) {
-            toast.error('Please enter at least Item Type and Sample Weight');
+        let localErrors = {};
+        if (!item) localErrors.item = true;
+        if (gross <= 0) localErrors.grossWeight = true;
+
+        if (Object.keys(localErrors).length > 0) {
+            setErrors(prev => ({ ...prev, sample: localErrors }));
+            addToast('Please enter Item Type and Gross Weight', 'error');
             return;
         }
+
+        if (sample > gross) {
+            setErrors(prev => ({ ...prev, sample: { ...prev.sample, sampleWeight: true } }));
+            addToast('Sample weight cannot exceed gross weight', 'error');
+            return;
+        }
+
+        setErrors(prev => ({ ...prev, sample: {} }));
+
         setSampleItems((prev) => [
             ...prev,
             {
                 id: `${Date.now()}-${Math.random()}`,
                 seq: prev.length + 1,
                 item,
-                sampleWeight: sampleWt,
-                totalWeight: totalWt,
-                netWeight: Math.max(0, netWt),
-                returned: netWt > 0
+                grossWeight: gross,
+                sampleWeight: sample,
+                netWeight: net,
+                returned: sampleDraft.returned
             }
         ]);
 
@@ -171,15 +164,20 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
         setSampleItems((prev) => prev.filter((s) => s.id !== id).map((s, idx) => ({ ...s, seq: idx + 1 })));
     };
 
-    const handleSave = async () => {
+    const handleSave = async (e) => {
+        if (e) e.preventDefault();
+
         if (!selectedCustomer) {
-            toast.error('Please select a customer');
+            setErrors(prev => ({ ...prev, customer: true }));
+            addToast('Please select a customer', 'error');
             return;
         }
         if (sampleItems.length === 0) {
-            toast.error('Add at least one sample item');
+            addToast('Add at least one sample item', 'error');
             return;
         }
+
+        setErrors({});
 
         setLoading(true);
         try {
@@ -187,20 +185,22 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
                 customer_id: selectedCustomer.id,
                 items: sampleItems.map((s) => ({
                     item_name: s.item,
-                    weight: s.totalWeight,
-                    sample_weight: s.sampleWeight,
-                    description: selectedCustomer.name,
+                    gross_weight: s.grossWeight,
+                    test_weight: s.sampleWeight, // API expects test_weight
+                    sample_weight: s.sampleWeight, // Backwards compatibility
                     returned: s.returned
                 }))
             };
 
             await api.post('/gold-tests', payload);
-            toast.success('Gold Test Created Successfully');
+            addToast('Gold Test Created Successfully', 'success');
+
+            // Explicitly call onSuccess to reload board AND close modal
             if (onSuccess) onSuccess();
             onHide();
             resetForm();
         } catch (error) {
-            toast.error(error.response?.data?.error || 'Failed to create test');
+            addToast(error.response?.data?.error || 'Failed to create test', 'error');
         } finally {
             setLoading(false);
         }
@@ -225,15 +225,18 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
                         <Form.Control
                             placeholder="Search by name or phone"
                             value={searchTerm}
+                            isInvalid={errors.customer}
                             onChange={(e) => {
                                 setSearchTerm(e.target.value);
                                 setShowSuggestions(true);
                                 if (!e.target.value.trim()) {
                                     setSelectedCustomer(null);
                                 }
+                                if (errors.customer) setErrors(prev => ({ ...prev, customer: false }));
                             }}
                             onFocus={() => setShowSuggestions(true)}
                         />
+                        {errors.customer && <Form.Control.Feedback type="invalid">Customer Selection Required</Form.Control.Feedback>}
                     </InputGroup>
 
                     {showSuggestions && searchTerm && (
@@ -265,79 +268,127 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
                     <Form.Control value={customerDisplay(selectedCustomer)} readOnly />
                 </Form.Group>
 
-                <Form.Label className="field-label mb-2">Sample Items</Form.Label>
-                <Row className="g-2 mb-2">
-                    <Col md={6}>
-                        <Form.Control
-                            placeholder="Item type (eg., Ring, Necklace)"
-                            value={sampleDraft.item}
-                            onChange={(e) => setSampleDraft((prev) => ({ ...prev, item: e.target.value }))}
+                <Form.Label className="field-label mb-2">Sample Item Entry</Form.Label>
+                <div className="item-entry-card p-3 mb-3 border rounded shadow-sm bg-light">
+                    <Row className="g-2 mb-2">
+                        <Col md={12}>
+                            <Form.Label className="small fw-bold">Item Type</Form.Label>
+                            <Form.Control
+                                placeholder="eg., Ring, Necklace"
+                                value={sampleDraft.item}
+                                isInvalid={errors.sample?.item}
+                                onChange={(e) => {
+                                    setSampleDraft((prev) => ({ ...prev, item: e.target.value }));
+                                    if (errors.sample?.item) setErrors(prev => ({ ...prev, sample: { ...prev.sample, item: false } }));
+                                }}
+                            />
+                        </Col>
+                    </Row>
+                    <Row className="g-2">
+                        <Col md={4}>
+                            <Form.Label className="small fw-bold">Gross Wt</Form.Label>
+                            <Form.Control
+                                type="number"
+                                step="0.001"
+                                placeholder="0.000"
+                                value={sampleDraft.grossWeight}
+                                isInvalid={errors.sample?.grossWeight}
+                                onChange={(e) => {
+                                    handleWeightFieldInput('grossWeight', e.target.value);
+                                    if (errors.sample?.grossWeight) setErrors(prev => ({ ...prev, sample: { ...prev.sample, grossWeight: false } }));
+                                }}
+                            />
+                        </Col>
+                        <Col md={4}>
+                            <Form.Label className="small fw-bold">Sample Wt</Form.Label>
+                            <Form.Control
+                                type="number"
+                                step="0.001"
+                                placeholder="0.000"
+                                value={sampleDraft.sampleWeight}
+                                isInvalid={errors.sample?.sampleWeight}
+                                onChange={(e) => {
+                                    handleWeightFieldInput('sampleWeight', e.target.value);
+                                    if (errors.sample?.sampleWeight) setErrors(prev => ({ ...prev, sample: { ...prev.sample, sampleWeight: false } }));
+                                }}
+                            />
+                        </Col>
+                        <Col md={4}>
+                            <Form.Label className="small fw-bold">Net Wt</Form.Label>
+                            <Form.Control
+                                value={deriveWeights(sampleDraft).net}
+                                readOnly
+                                className="bg-white"
+                            />
+                        </Col>
+                    </Row>
+                    <div className="d-flex align-items-center gap-3 mt-2">
+                        <Form.Check
+                            type="switch"
+                            id="returned-draft"
+                            label="Returned (No Charge)"
+                            checked={sampleDraft.returned}
+                            onChange={(e) => setSampleDraft(prev => ({ ...prev, returned: e.target.checked }))}
+                            className="fw-bold"
                         />
-                    </Col>
-                    <Col md={6}>
-                        <Form.Control
-                            type="number"
-                            step="0.001"
-                            placeholder="Sample Wt (g)"
-                            value={sampleDraft.sampleWeight}
-                            onChange={(e) => handleWeightFieldInput('sampleWeight', e.target.value)}
-                            onBlur={() => handleWeightFieldBlur('sampleWeight')}
-                        />
-                    </Col>
-                </Row>
-                <Row className="g-2 mb-3">
-                    <Col md={12}>
-                        <Form.Control
-                            type="number"
-                            step="0.001"
-                            placeholder="Net Wt (g)"
-                            value={sampleDraft.netWeight}
-                            onChange={(e) => handleWeightFieldInput('netWeight', e.target.value)}
-                            onBlur={() => handleWeightFieldBlur('netWeight')}
-                        />
-                    </Col>
-                </Row>
-
-                <div className="returned-row mb-3">
-                    <span className="field-label mb-0">Returned</span>
-                    <Form.Check
-                        type="switch"
-                        checked={sampleDraft.returned}
-                        onChange={toggleReturned}
-                        disabled
-                    />
+                    </div>
+                    <Button className="add-sample-btn mt-3" onClick={addSampleToList}>
+                        <FaPlus className="me-1" /> Add to List
+                    </Button>
                 </div>
-
-                <Button className="add-sample-btn" onClick={addSampleToList}>
-                    <FaPlus className="me-1" /> Add Sample Item
-                </Button>
 
                 <div className="sample-list-panel mt-3">
                     <div className="sample-list-head">
-                        <span>Sample Items</span>
+                        <span>Items List</span>
                         <span className="count-pill">{sampleItems.length} items</span>
                     </div>
-                    <div className="sample-list-body">
-                        {sampleItems.length === 0 ? (
-                            <div className="empty-list">No samples added yet</div>
-                        ) : sampleItems.map((s) => (
-                            <div key={s.id} className="sample-row">
-                                <div className="sample-main">
-                                    <div className="sample-title">
-                                        #{s.seq} - {s.item}{' '}
-                                        <Badge bg={s.returned ? 'success' : 'danger'} className="status-badge">
-                                            {s.returned ? 'Returned' : 'Not Returned'}
-                                        </Badge>
-                                    </div>
-                                    <div className="sample-meta">
-                                        Sample: {s.sampleWeight}g | Total: {s.totalWeight}g | Net: {s.netWeight}g
-                                    </div>
-                                </div>
-                                <Button variant="outline-danger" size="sm" onClick={() => removeSample(s.id)}>
-                                    <FaTrash className="me-1" /> Remove
-                                </Button>
-                            </div>
-                        ))}
+                    <div className="table-responsive">
+                        <table className="table table-bordered table-hover mb-0" style={{ fontSize: '0.85rem' }}>
+                            <thead className="table-dark">
+                                <tr>
+                                    <th>#</th>
+                                    <th>Item</th>
+                                    <th>Gross</th>
+                                    <th>Sample</th>
+                                    <th>Net</th>
+                                    <th className="text-center">Ret?</th>
+                                    <th className="text-center"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {sampleItems.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="7" className="text-center py-4 text-muted italic">No items added yet</td>
+                                    </tr>
+                                ) : (
+                                    sampleItems.map((s) => (
+                                        <tr key={s.id}>
+                                            <td>{s.seq}</td>
+                                            <td className="fw-bold">{s.item}</td>
+                                            <td>{s.grossWeight}g</td>
+                                            <td>{s.sampleWeight}g</td>
+                                            <td className="text-primary fw-bold">{s.netWeight}g</td>
+                                            <td className="text-center">
+                                                <Form.Check
+                                                    type="switch"
+                                                    checked={s.returned}
+                                                    onChange={() => {
+                                                        setSampleItems(prev => prev.map(item =>
+                                                            item.id === s.id ? { ...item, returned: !item.returned } : item
+                                                        ));
+                                                    }}
+                                                />
+                                            </td>
+                                            <td className="text-center">
+                                                <Button variant="link" className="p-0 text-danger" onClick={() => removeSample(s.id)}>
+                                                    <FaTrash />
+                                                </Button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </Modal.Body>
@@ -359,110 +410,169 @@ const NewGoldTestModal = ({ show, onHide, onSuccess }) => {
 
             <style>{`
                 .new-sample-modal .modal-content {
-                    border-radius: 12px;
+                    border-radius: 20px;
                     border: none;
+                    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+                    overflow: hidden;
                 }
                 .new-sample-header {
-                    border-bottom: 1px solid #dee2e6;
-                    padding-bottom: 10px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 1.5rem 2rem;
+                    border: none;
+                }
+                .new-sample-header .btn-close {
+                    filter: brightness(0) invert(1);
+                    opacity: 0.8;
                 }
                 .field-label {
-                    font-size: 0.86rem;
-                    font-weight: 600;
+                    font-size: 0.9rem;
+                    font-weight: 700;
                     color: #374151;
+                    margin-bottom: 0.5rem;
+                    text-transform: uppercase;
+                    letter-spacing: 0.025em;
                 }
                 .required {
                     color: #ef4444;
+                }
+                .form-control, .input-group-text {
+                    border-radius: 10px;
+                    padding: 0.75rem 1rem;
+                    border: 2px solid #e5e7eb;
+                    font-weight: 500;
+                }
+                .form-control:focus {
+                    border-color: #667eea;
+                    box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
                 }
                 .suggestion-list {
                     position: absolute;
                     left: 0;
                     right: 0;
                     z-index: 1000;
-                    max-height: 220px;
-                    overflow-y: auto;
-                    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+                    margin-top: 5px;
+                    border-radius: 12px;
+                    overflow: hidden;
+                    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+                    border: 2px solid #667eea;
                 }
                 .returned-row {
                     display: flex;
                     align-items: center;
-                    gap: 10px;
+                    justify-content: space-between;
+                    background: #f9fafb;
+                    padding: 1rem;
+                    border-radius: 12px;
+                    margin-top: 1rem;
                 }
                 .add-sample-btn {
                     width: 100%;
+                    padding: 1rem;
                     border: none;
-                    background: #3b82f6;
-                    font-weight: 600;
+                    background: linear-gradient(90deg, #667eea, #764ba2);
+                    font-weight: 800;
+                    border-radius: 12px;
+                    margin-top: 1.5rem;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    transition: all 0.3s ease;
                 }
                 .add-sample-btn:hover {
-                    background: #2563eb;
+                    transform: translateY(-2px);
+                    box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
                 }
                 .sample-list-panel {
-                    border: 1px solid #d1d5db;
-                    border-radius: 8px;
+                    margin-top: 2rem;
+                    border: 2px solid #f3f4f6;
+                    border-radius: 16px;
                     overflow: hidden;
                 }
                 .sample-list-head {
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
-                    padding: 10px 12px;
-                    color: #fff;
-                    font-weight: 700;
-                    background: linear-gradient(90deg, #5b6ee1, #7456b7);
+                    padding: 1rem 1.25rem;
+                    color: #ffffff;
+                    font-weight: 800;
+                    background: #1f2937;
+                    font-size: 1rem;
                 }
                 .count-pill {
-                    font-size: 0.74rem;
-                    background: rgba(255, 255, 255, 0.25);
-                    border-radius: 999px;
-                    padding: 3px 10px;
+                    font-size: 0.8rem;
+                    background: rgba(255, 255, 255, 0.15);
+                    border-radius: 30px;
+                    padding: 4px 12px;
+                    letter-spacing: 0.05em;
                 }
                 .sample-list-body {
-                    background: #fff;
+                    background: #ffffff;
+                    max-height: 350px;
+                    overflow-y: auto;
                 }
                 .empty-list {
-                    padding: 14px 12px;
-                    color: #6b7280;
-                    font-size: 0.9rem;
+                    padding: 3rem 1rem;
+                    text-align: center;
+                    color: #9ca3af;
+                    font-style: italic;
+                    font-weight: 500;
                 }
                 .sample-row {
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
-                    gap: 10px;
-                    padding: 10px 12px;
-                    border-top: 1px solid #e5e7eb;
+                    padding: 1.25rem;
+                    border-bottom: 1px solid #f3f4f6;
+                    transition: background 0.2s;
                 }
-                .sample-main {
-                    min-width: 0;
+                .sample-row:hover {
+                    background: #f9fafb;
                 }
                 .sample-title {
-                    font-size: 0.9rem;
-                    font-weight: 600;
+                    font-size: 1.1rem;
+                    font-weight: 800;
                     color: #111827;
+                    margin-bottom: 0.2rem;
                 }
                 .sample-meta {
-                    font-size: 0.82rem;
-                    color: #4b5563;
+                    font-size: 0.9rem;
+                    color: #6b7280;
+                    font-weight: 600;
                 }
                 .status-badge {
-                    font-size: 0.65rem;
-                    margin-left: 6px;
+                    font-size: 0.7rem;
+                    margin-left: 8px;
+                    padding: 4px 10px;
+                    border-radius: 30px;
                     vertical-align: middle;
+                    text-transform: uppercase;
                 }
                 .new-sample-footer {
+                    padding: 1.5rem 2rem;
                     display: grid;
                     grid-template-columns: 1fr 1fr;
-                    gap: 10px;
-                    border-top: none;
+                    gap: 1.25rem;
+                    background: #f9fafb;
+                    border-top: 1px solid #e5e7eb;
                 }
                 .save-btn {
+                    padding: 0.9rem;
                     border: none;
-                    background: linear-gradient(90deg, #5664df, #4f7bea);
-                    font-weight: 700;
+                    background: #10b981;
+                    font-weight: 800;
+                    border-radius: 12px;
+                    color: white;
+                }
+                .save-btn:hover {
+                    background: #059669;
+                    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
                 }
                 .cancel-btn {
-                    font-weight: 600;
+                    padding: 0.9rem;
+                    font-weight: 700;
+                    border-radius: 12px;
+                    border: 2px solid #e5e7eb;
+                    color: #374151;
                 }
             `}</style>
         </Modal>

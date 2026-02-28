@@ -182,29 +182,29 @@ class ListService {
                 break;
 
             case 'credit-history':
-                // credit_history uses 'createdon'
-                query = `SELECT t.*, t.createdon as created, c.name as customer_name FROM credit_history t ${joinCustomer} WHERE t.deletedon IS NULL`;
-                countQuery = `SELECT COUNT(*) as total FROM credit_history t ${joinCustomer} WHERE t.deletedon IS NULL`;
+                // credit_history uses 'created' not 'createdon', and has no 'deletedon'
+                query = `SELECT t.*, t.created, c.name as customer_name FROM credit_history t ${joinCustomer} WHERE 1=1`;
+                countQuery = `SELECT COUNT(*) as total FROM credit_history t ${joinCustomer} WHERE 1=1`;
                 if (search) {
                     query += " AND (c.name LIKE ? OR c.phone LIKE ?)";
                     countQuery += " AND (c.name LIKE ? OR c.phone LIKE ?)";
                     queryParams.push(searchTerm, searchTerm);
                     countParams.push(searchTerm, searchTerm);
                 }
-                query += " ORDER BY t.createdon DESC";
+                query += " ORDER BY t.created DESC";
                 break;
 
             case 'weight-loss-history':
-                // weight_loss_history uses 'createdon'
-                query = `SELECT t.*, t.createdon as created, c.name as customer_name FROM weight_loss_history t ${joinCustomer} WHERE t.deletedon IS NULL`;
-                countQuery = `SELECT COUNT(*) as total FROM weight_loss_history t ${joinCustomer} WHERE t.deletedon IS NULL`;
+                // weight_loss_history uses 'created' not 'createdon', and has no 'deletedon'
+                query = `SELECT t.*, t.created, c.name as customer_name FROM weight_loss_history t ${joinCustomer} WHERE 1=1`;
+                countQuery = `SELECT COUNT(*) as total FROM weight_loss_history t ${joinCustomer} WHERE 1=1`;
                 if (search) {
                     query += " AND (c.name LIKE ? OR c.phone LIKE ?)";
                     countQuery += " AND (c.name LIKE ? OR c.phone LIKE ?)";
                     queryParams.push(searchTerm, searchTerm);
                     countParams.push(searchTerm, searchTerm);
                 }
-                query += " ORDER BY t.createdon DESC";
+                query += " ORDER BY t.created DESC";
                 break;
 
             default:

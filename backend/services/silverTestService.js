@@ -1,39 +1,41 @@
 const silverTestRepository = require('../repositories/silverTestRepository');
 const customerRepository = require('../repositories/customerRepository');
-const billingService = require('./billingService');
-
 
 class SilverTestService {
-    calculateSilverValues(testWeight, purity) {
-        // Business logic as per distilled rules: Testing is a flat 30.00 per item? 
-        // Or dependent on silver? 
-        // For now, assuming parity with Gold until instructed otherwise, but billingService suggests otherwise.
-        const bill = billingService.calculateTestBill(1); // 1 item
-        return {
-            total: bill.netAmount
-        };
-    }
-
     async createTest(data) {
-        const { customer_id, items, status, mode_of_payment = 'Cash' } = data;
+        const { customer_id, items, status = 'TODO', mode_of_payment = 'Cash' } = data;
+
         const customer = customerRepository.findById(customer_id);
         if (!customer) throw new Error('Customer not found');
 
-        let totalAmount = 0;
+        // Enforcement: Intake Phase (TODO)
+        // If status is TODO, we must ensure purity and payment fields are NOT processed as meaningful results yet.
+        // Actually, repository create handles initial totals. 
+        // We strip purity for TODO intake if client sent them.
         const processedItems = items.map(item => {
-            const bill = billingService.calculateTestBill(1);
-            totalAmount += bill.netAmount;
-            return {
-                ...item,
-                item_type: item.item || item.item_type || 'Silver Sample',
-                sample_weight: Math.round((parseFloat(item.total_weight || item.sample_weight) || 0) * 1000) / 1000,
-                test_weight: Math.round((parseFloat(item.test_weight) || 0) * 1000) / 1000,
-                purity: Math.round((parseFloat(item.purity) || 0) * 100) / 100,
+            const cleanItem = {
+                item_name: item.item_name || item.item_type || item.item || 'Silver Sample',
+                gross_weight: parseFloat(item.gross_weight || item.total_weight || item.weight || 0),
+                sample_weight: parseFloat(item.sample_weight || 0),
+                test_weight: parseFloat(item.test_weight || 0), // Often 0 at intake
+                returned: Boolean(item.returned)
             };
+
+            if (status !== 'TODO') {
+                cleanItem.purity = parseFloat(item.purity || 0);
+            } else {
+                cleanItem.purity = 0; // Intake has no purity
+            }
+
+            return cleanItem;
         });
 
-        // Pass totalAmount and mode_of_payment
-        const result = await silverTestRepository.create(customer_id, processedItems, status, mode_of_payment, totalAmount);
+        const result = await silverTestRepository.create(
+            customer_id,
+            processedItems,
+            status,
+            status === 'TODO' ? 'Pending' : mode_of_payment
+        );
 
         return result;
     }
@@ -41,7 +43,13 @@ class SilverTestService {
     async getTests(filters) {
         const tests = silverTestRepository.findAll(filters);
         const total = silverTestRepository.count(filters);
-        return { tests, pagination: { total, pages: Math.ceil(total / (filters.limit || 20)) } };
+        return {
+            tests,
+            pagination: {
+                total,
+                pages: Math.ceil(total / (filters.limit || 20))
+            }
+        };
     }
 
     async getTestDetails(id) {
@@ -51,43 +59,48 @@ class SilverTestService {
     }
 
     async updateStatus(id, status) {
+        // Repository handles immutability check
         const result = silverTestRepository.updateStatus(id, status);
-        if (result.changes === 0) throw new Error('Silver test not found');
+        if (result.changes === 0) throw new Error('Update failed or Record not found');
         return true;
     }
 
     async updateItem(testId, itemId, updates) {
-        // If weights or purity changed, maybe recalculate total?
-        // Silver usually has a fixed per-item cost, so maybe not sensitive to weight changes for *Price*.
-
+        // Repository handles immutability and recalculation
         const result = silverTestRepository.updateItem(testId, itemId, updates);
-        if (result.changes === 0) throw new Error('Item not found');
+        if (result.changes === 0) throw new Error('Item update failed');
         return true;
     }
 
     async finalizeTest(id, data) {
+        // Testing Phase -> DONE
         const { items, mode_of_payment, weight_loss } = data;
+
+        // Finalize items often involves setting the final purity
         return silverTestRepository.finalize(id, items, mode_of_payment, weight_loss || 0);
     }
 
     async saveTestResults(id, data) {
+        // This is used for Testing Phase (IN_PROGRESS)
         const { items, mode_of_payment, total } = data;
 
-        // Validate items
         items.forEach(item => {
-            const purity = parseFloat(item.purity);
-            if (isNaN(purity) || purity < 0 || purity > 100) {
-                throw new Error(`Invalid purity for item ${item.item_no}: ${item.purity}`);
+            if (item.purity !== undefined) {
+                const p = parseFloat(item.purity);
+                if (isNaN(p) || p <= 0 || p > 100) {
+                    throw new Error(`Invalid purity for item: ${item.purity || 'empty'}. Must be between 0 and 100%.`);
+                }
             }
         });
+
+        if (total !== undefined && (isNaN(parseFloat(total)) || parseFloat(total) < 0)) {
+            throw new Error('Invalid total amount');
+        }
 
         return silverTestRepository.updateResults(id, items, mode_of_payment, total);
     }
 
     async deleteTest(id) {
-        const test = silverTestRepository.findById(id);
-        if (!test) throw new Error('Silver test not found');
-        if (test.status === 'IN_PROGRESS') throw new Error('Cannot delete test in progress');
         return silverTestRepository.softDelete(id);
     }
 }

@@ -1,64 +1,72 @@
 const BaseRepository = require('./baseRepository');
 const { db, now, genId, getNextSequence, transaction } = require('../db/db');
-const { formatTimestamp, generateAutoNumber } = require('../utils/autoNumber');
+const SequenceService = require('../services/sequenceService');
+const GoldTestCalculationService = require('../services/goldTestCalculationService');
 
 class GoldTestRepository {
     constructor() {
         this.db = db;
     }
 
-    async create(customer_id, items, status = 'TODO', mode_of_payment = 'Cash', totalAmount = 0) {
+    async create(customer_id, items, status = 'TODO', mode_of_payment = 'Cash') {
         return transaction(() => {
             const nowObj = new Date();
             const timestamp = nowObj.toISOString();
-            const batchId = formatTimestamp(nowObj);
             const testId = genId('GTS');
-            const parentAutoNumber = generateAutoNumber('GT', batchId, 1);
+            const parentAutoNumber = SequenceService.generateGlobalSequence();
 
             // 1. Insert parent
             this.db.prepare(`
                 INSERT INTO gold_test (id, auto_number, customer_id, status, mode_of_payment, total, created, lastmodified)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(testId, parentAutoNumber, customer_id, status, mode_of_payment, totalAmount, timestamp, timestamp);
+            `).run(testId, parentAutoNumber, customer_id, status, mode_of_payment, 0, timestamp, timestamp);
 
             // 2. Insert items
             const insertedItems = [];
             let itemSeq = 1;
             for (const item of items) {
                 const itemId = genId('GTI');
-                const itemNumber = generateAutoNumber('GTI', batchId, itemSeq++);
+                const itemNumber = `${parentAutoNumber}-${itemSeq++}`;
 
-                // Handle payload from NewGoldTestModal: { item_name, weight, ... }
-                const itemType = item.item_type || item.item_name || item.item || 'Gold Sample';
-                const sampleWeight = item.sample_weight || item.total_weight || item.weight || 0;
+                // Use Calculation Authority
+                const calculated = GoldTestCalculationService.calculateItem({
+                    gross_weight: item.gross_weight || item.weight || item.total_weight || 0,
+                    test_weight: item.test_weight || item.sample_weight || 0,
+                    purity: item.purity || 0,
+                    returned: item.returned || false,
+                    item_type: item.item_type || item.item_name || 'Gold Sample'
+                });
 
-                // Matches schema: id, gold_test_id, item_number, item_type, sample_weight, test_weight, purity, returned, created, deletedon
                 this.db.prepare(`
                     INSERT INTO gold_test_item (
                         id, gold_test_id, item_number, item_type, 
-                        sample_weight, test_weight, purity, 
+                        gross_weight, sample_weight, test_weight, net_weight,
+                        purity, fine_weight, item_total,
                         returned, created
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
-                    itemId, testId, itemNumber, itemType,
-                    sampleWeight,
-                    item.test_weight || 0,
-                    item.purity || 0,
-                    item.returned ? 1 : 0,
+                    itemId, testId, itemNumber, calculated.item_type,
+                    calculated.gross_weight,
+                    item.sample_weight || calculated.test_weight, // Keep raw sample_weight if provided
+                    calculated.test_weight,
+                    calculated.net_weight,
+                    calculated.purity,
+                    calculated.fine_weight,
+                    calculated.item_total,
+                    calculated.returned ? 1 : 0,
                     timestamp
                 );
 
                 insertedItems.push({
                     id: itemId,
                     item_number: itemNumber,
-                    item_type: itemType,
-                    sample_weight: sampleWeight,
-                    test_weight: item.test_weight || 0,
-                    purity: item.purity || 0,
-                    returned: item.returned ? 1 : 0,
+                    ...calculated,
                     created: timestamp
                 });
             }
+
+            // 3. Roll-up Totals
+            GoldTestCalculationService.updateParentTotals(testId, this.db);
 
             return { id: testId, auto_number: parentAutoNumber, items: insertedItems, created: timestamp };
         })();
@@ -143,9 +151,36 @@ class GoldTestRepository {
     }
 
     updateStatus(id, status) {
-        return this.db.prepare(`
-            UPDATE gold_test SET status = ?, lastmodified = ? WHERE id = ? AND deletedon IS NULL
-        `).run(status, now(), id);
+        const timestamp = now();
+
+        // No Backward Move Rule
+        const current = this.db.prepare("SELECT status FROM gold_test WHERE id = ?").get(id);
+        const statusHierarchy = { 'TODO': 1, 'IN_PROGRESS': 2, 'DONE': 3 };
+
+        if (current) {
+            if (statusHierarchy[current.status] > statusHierarchy[status]) {
+                throw new Error(`Backward move NOT permitted: Cannot move from ${current.status} to ${status}`);
+            }
+            if (current.status === 'DONE') {
+                throw new Error('409: Cannot update status of a DONE test');
+            }
+        }
+
+        let query = "UPDATE gold_test SET status = ?, lastmodified = ?";
+        const params = [status, timestamp];
+
+        if (status === 'IN_PROGRESS') {
+            query += ", in_progress_at = COALESCE(in_progress_at, ?)";
+            params.push(timestamp);
+        } else if (status === 'DONE') {
+            query += ", done_at = COALESCE(done_at, ?)";
+            params.push(timestamp);
+        }
+
+        query += " WHERE id = ? AND deletedon IS NULL";
+        params.push(id);
+
+        return this.db.prepare(query).run(...params);
     }
 
     updateTotal(id, total) {
@@ -155,71 +190,103 @@ class GoldTestRepository {
     }
 
     updateItem(testId, itemId, updates) {
-        // Map frontend fields (total_weight -> sample_weight) if needed
-        if (updates.total_weight) {
-            updates.sample_weight = updates.total_weight;
-            delete updates.total_weight;
-        }
-        if (updates.item) {
-            updates.item_type = updates.item;
-            delete updates.item;
-        }
+        return transaction(() => {
+            // Check Immutability
+            const parent = this.db.prepare(`SELECT status FROM gold_test WHERE id = ?`).get(testId);
+            if (parent && parent.status === 'DONE') {
+                throw new Error('409: Cannot edit items of a DONE test');
+            }
 
-        // Remove unsupported fields
-        delete updates.total;
-        delete updates.certificate_required;
-        delete updates.parent_id;
-        delete updates.weight_loss;
-        delete updates.certificate_number;
+            // Get current item for merging
+            const current = this.db.prepare(`SELECT * FROM gold_test_item WHERE id = ?`).get(itemId);
+            if (!current) throw new Error('Item not found');
 
-        // Explicitly prevent editing item_number
-        delete updates.item_number;
+            const merged = { ...current, ...updates };
 
-        // Important: check if updates object becomes empty to avoid SQL error
-        if (Object.keys(updates).length === 0) return { changes: 0 };
+            // Recalculate
+            const calculated = GoldTestCalculationService.calculateItem({
+                gross_weight: merged.gross_weight,
+                test_weight: merged.test_weight,
+                purity: merged.purity,
+                returned: merged.returned == 1 || merged.returned === true,
+                item_type: merged.item_type
+            });
 
-        const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-        const values = [...Object.values(updates), itemId, testId];
+            const fieldsToUpdate = {
+                item_type: calculated.item_type,
+                gross_weight: calculated.gross_weight,
+                test_weight: calculated.test_weight,
+                net_weight: calculated.net_weight,
+                purity: calculated.purity,
+                fine_weight: calculated.fine_weight,
+                item_total: calculated.item_total,
+                returned: calculated.returned ? 1 : 0
+            };
 
-        return this.db.prepare(`
-            UPDATE gold_test_item SET ${fields}
-            WHERE id = ? AND gold_test_id = ? AND deletedon IS NULL
-        `).run(...values);
+            const fields = Object.keys(fieldsToUpdate).map(k => `${k} = ?`).join(', ');
+            const values = [...Object.values(fieldsToUpdate), itemId, testId];
+
+            const result = this.db.prepare(`
+                UPDATE gold_test_item SET ${fields}
+                WHERE id = ? AND gold_test_id = ? AND deletedon IS NULL
+            `).run(...values);
+
+            // Roll-up
+            GoldTestCalculationService.updateParentTotals(testId, this.db);
+
+            return result;
+        })();
     }
 
     finalize(id, items, mode_of_payment, weightLossAmount) {
         return transaction(() => {
+            // Check current status
+            const current = this.db.prepare("SELECT status FROM gold_test WHERE id = ?").get(id);
+            if (current && current.status === 'DONE') {
+                throw new Error('409: Gold test is already finalized and immutable');
+            }
+
             const timestamp = now();
 
-            // 1. Update Parent Status
+            // 1. Update items with final values and recalculate Charge
+            for (const item of items) {
+                const currentItem = this.db.prepare("SELECT * FROM gold_test_item WHERE id = ?").get(item.id);
+                if (currentItem) {
+                    const calculated = GoldTestCalculationService.calculateItem({
+                        gross_weight: currentItem.gross_weight,
+                        test_weight: currentItem.test_weight,
+                        purity: item.purity,
+                        returned: item.returned == 1 || item.returned === true,
+                        item_type: currentItem.item_type
+                    });
+
+                    this.db.prepare(`
+                        UPDATE gold_test_item 
+                        SET purity = ?, returned = ?, fine_weight = ?, item_total = ?
+                        WHERE id = ? AND gold_test_id = ? AND deletedon IS NULL
+                    `).run(calculated.purity, calculated.returned ? 1 : 0, calculated.fine_weight, calculated.item_total, item.id, id);
+                }
+            }
+
+            // 2. Finalize Parent Roll-up and Status
+            GoldTestCalculationService.updateParentTotals(id, this.db);
+
             this.db.prepare(`
                 UPDATE gold_test 
-                SET status = 'DONE', mode_of_payment = ?, lastmodified = ? 
+                SET status = 'DONE', mode_of_payment = ?, done_at = ?, lastmodified = ? 
                 WHERE id = ? AND deletedon IS NULL
-            `).run(mode_of_payment, timestamp, id);
-
-            // 2. Update Items
-            const updateItemStmt = this.db.prepare(`
-                UPDATE gold_test_item 
-                SET purity = ?, returned = ? 
-                WHERE id = ? AND gold_test_id = ? AND deletedon IS NULL
-            `);
-
-            for (const item of items) {
-                updateItemStmt.run(item.purity, item.returned ? 1 : 0, item.id, id);
-            }
+            `).run(mode_of_payment, timestamp, timestamp, id);
 
             // 3. Record Weight Loss if applicable
             if (weightLossAmount > 0) {
                 const wlhId = genId('WLH');
-                // Fetch customer_id to link history
                 const test = this.db.prepare("SELECT customer_id FROM gold_test WHERE id = ?").get(id);
 
                 if (test) {
                     this.db.prepare(`
-                        INSERT INTO weight_loss_history (id, customer_id, amount, mode_of_payment, reason, createdon)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    `).run(wlhId, test.customer_id, weightLossAmount, mode_of_payment, `Gold Test Finalization: ${id}`, timestamp);
+                        INSERT INTO weight_loss_history (id, customer_id, amount, reason, created)
+                        VALUES (?, ?, ?, ?, ?)
+                    `).run(wlhId, test.customer_id, weightLossAmount, `Gold Test Finalization: ${id}`, timestamp);
                 }
             }
 
@@ -237,29 +304,56 @@ class GoldTestRepository {
 
     updateResults(id, items, mode_of_payment, total) {
         return transaction(() => {
+            const current = this.db.prepare("SELECT status FROM gold_test WHERE id = ?").get(id);
+            if (current && current.status === 'DONE') {
+                throw new Error('409: Cannot update results of a DONE test');
+            }
+
             const timestamp = now();
 
             // 1. Update items
-            const updateItemStmt = this.db.prepare(`
-                UPDATE gold_test_item 
-                SET purity = ?, returned = ? 
-                WHERE id = ? AND gold_test_id = ? AND deletedon IS NULL
-            `);
-
             for (const item of items) {
-                updateItemStmt.run(item.purity, item.returned ? 1 : 0, item.id, id);
+                const currentItem = this.db.prepare("SELECT * FROM gold_test_item WHERE id = ?").get(item.id);
+                if (currentItem) {
+                    const calculated = GoldTestCalculationService.calculateItem({
+                        gross_weight: currentItem.gross_weight,
+                        test_weight: currentItem.test_weight,
+                        purity: item.purity,
+                        returned: item.returned == 1 || item.returned === true,
+                        item_type: currentItem.item_type
+                    });
+
+                    this.db.prepare(`
+                        UPDATE gold_test_item 
+                        SET purity = ?, returned = ?, fine_weight = ?, item_total = ?
+                        WHERE id = ? AND gold_test_id = ? AND deletedon IS NULL
+                    `).run(calculated.purity, calculated.returned ? 1 : 0, calculated.fine_weight, calculated.item_total, item.id, id);
+                }
             }
 
-            // 2. Update parent transaction details if provided
-            if (mode_of_payment !== undefined && total !== undefined) {
-                this.db.prepare(`
-                    UPDATE gold_test 
-                    SET mode_of_payment = ?, total = ?, lastmodified = ? 
-                    WHERE id = ? AND deletedon IS NULL
-                `).run(mode_of_payment, total, timestamp, id);
-            } else {
-                // Touch parent only
-                this.db.prepare("UPDATE gold_test SET lastmodified = ? WHERE id = ?").run(timestamp, id);
+            // 2. Update parent and Roll-up
+            GoldTestCalculationService.updateParentTotals(id, this.db);
+
+            let query = "UPDATE gold_test SET lastmodified = ?";
+            const params = [timestamp];
+
+            if (mode_of_payment !== undefined) {
+                query += ", mode_of_payment = ?";
+                params.push(mode_of_payment);
+            }
+
+            if (total !== undefined) {
+                query += ", total = ?";
+                params.push(total);
+            }
+
+            query += " WHERE id = ? AND deletedon IS NULL";
+            params.push(id);
+
+            this.db.prepare(query).run(...params);
+
+            if (mode_of_payment !== undefined && current.status === 'TODO') {
+                this.db.prepare("UPDATE gold_test SET status = 'IN_PROGRESS', in_progress_at = COALESCE(in_progress_at, ?) WHERE id = ?").run(timestamp, id);
             }
 
             return { success: true };

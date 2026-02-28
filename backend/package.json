@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "nodemon app.js",
     "start": "node app.js",
-    "backup": "node utils/backup.js"
+    "backup": "node utils/backup.js",
+    "test": "node tests/kanban.test.js && node scripts/verifyApi.js"
   },
   "bin": "app.js",
   "pkg": {

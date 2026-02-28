@@ -1,6 +1,7 @@
 const BaseRepository = require('./baseRepository');
 const { db, now, genId, getNextSequence, transaction } = require('../db/db');
-const { formatTimestamp, generateAutoNumber } = require('../utils/autoNumber');
+const SequenceService = require('../services/sequenceService');
+const CertificateCalculationService = require('../services/certificateCalculationService');
 
 class GoldCertificateRepository {
     constructor() {
@@ -8,23 +9,22 @@ class GoldCertificateRepository {
     }
 
     async create(customer_id, items, data, status = 'TODO') {
-        const { mode_of_payment = 'Cash', gst = 0, gst_bill_number = '', total_tax = 0, total = 0 } = data;
+        const { mode_of_payment = 'Cash', gst = 0, gst_bill_number = '', total_tax = 0 } = data;
 
         return transaction(() => {
             const nowObj = new Date();
             const timestamp = nowObj.toISOString();
-            const batchId = formatTimestamp(nowObj);
             const certId = genId('GCR');
-            const parentAutoNumber = generateAutoNumber('GC', batchId, 1);
+            const parentAutoNumber = SequenceService.generateGlobalSequence();
 
-            // 1. Insert Parent
+            // 1. Insert Parent (Initial values, will be updated by roll-up)
             this.db.prepare(`
                 INSERT INTO gold_certificate (
                     id, auto_number, customer_id, status, mode_of_payment, total, 
                     gst, gst_bill_number, total_tax, created, lastmodified
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
-                certId, parentAutoNumber, customer_id, status, mode_of_payment, total,
+                certId, parentAutoNumber, customer_id, status, mode_of_payment, 0,
                 gst ? 1 : 0, gst_bill_number, total_tax, timestamp, timestamp
             );
 
@@ -33,29 +33,40 @@ class GoldCertificateRepository {
             let itemSeq = 1;
             for (const item of items) {
                 const itemId = genId('GCI');
-                const itemNumber = generateAutoNumber('GCI', batchId, itemSeq++);
+                const itemNumber = `${parentAutoNumber}-${itemSeq++}`;
+
+                // Authoritative calculation
+                const calculated = CertificateCalculationService.calculateGoldItem({
+                    ...item,
+                    is_returned: item.returned
+                });
 
                 this.db.prepare(`
                     INSERT INTO gold_certificate_item (
                         id, gold_certificate_id, item_number, item_type,
                         gross_weight, test_weight, net_weight, purity,
                         rate_per_gram, fine_weight, item_total,
-                        returned, created
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        returned, created, certificate_number, name
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
-                    itemId, certId, itemNumber, item.item_type || item.item_name || 'Item',
-                    item.gross_weight, item.test_weight, item.net_weight, item.purity,
-                    item.rate_per_gram, item.fine_weight, item.item_total,
-                    item.returned ? 1 : 0, timestamp
+                    itemId, certId, itemNumber, item.item_type || 'Item',
+                    calculated.gross_weight, calculated.test_weight, calculated.net_weight, calculated.purity,
+                    calculated.rate_per_gram, calculated.fine_weight, calculated.item_total,
+                    calculated.is_returned ? 1 : 0, timestamp, item.certificate_number || `A${String(itemSeq - 1).padStart(2, '0')}`, item.name || ''
                 );
 
                 insertedItems.push({
                     id: itemId,
                     item_number: itemNumber,
-                    ...item,
+                    ...calculated,
                     created: timestamp
                 });
             }
+
+            // 3. Roll-up Totals to Parent
+            // we use the synchronous version of the DB here usually, but the service is async-ready
+            // Since we are in a transaction, let's call the logic directly or ensure updateCertificateTotals works with the raw db
+            CertificateCalculationService.updateCertificateTotals(certId, this.db);
 
             return { id: certId, auto_number: parentAutoNumber, items: insertedItems, created: timestamp };
         })();
@@ -127,29 +138,75 @@ class GoldCertificateRepository {
     }
 
     updateStatus(id, status) {
-        return this.db.prepare(`
-            UPDATE gold_certificate SET status = ?, lastmodified = ? WHERE id = ? AND deletedon IS NULL
-        `).run(status, now(), id);
+        return transaction(() => {
+            const current = this.db.prepare("SELECT status FROM gold_certificate WHERE id = ?").get(id);
+            const statusHierarchy = { 'TODO': 1, 'IN_PROGRESS': 2, 'DONE': 3 };
+
+            if (current) {
+                if (statusHierarchy[current.status] > statusHierarchy[status]) {
+                    throw new Error(`Backward move NOT permitted: Cannot move from ${current.status} to ${status}`);
+                }
+                if (current.status === 'DONE') {
+                    throw new Error('409: Cannot update status of a DONE certificate');
+                }
+            }
+
+            return this.db.prepare(`
+                UPDATE gold_certificate SET status = ?, lastmodified = ? WHERE id = ? AND deletedon IS NULL
+            `).run(status, now(), id);
+        })();
     }
 
-    updateTotal(id, total, total_tax) {
-        return this.db.prepare(`
-            UPDATE gold_certificate SET total = ?, total_tax = ?, lastmodified = ? WHERE id = ? AND deletedon IS NULL
-        `).run(total, total_tax || 0, now(), id);
-    }
+    async updateItem(certId, itemId, updates) {
+        return transaction(() => {
+            // 0. Check Status (Immutability)
+            const parent = this.db.prepare(`SELECT status FROM gold_certificate WHERE id = ?`).get(certId);
+            if (parent && parent.status === 'DONE') {
+                throw new Error('Cannot edit items of a DONE certificate');
+            }
 
-    updateItem(certId, itemId, updates) {
-        delete updates.item_number; // Immutable
+            // 1. Get current item data to merge updates
+            const currentItem = this.db.prepare(`
+                SELECT * FROM gold_certificate_item WHERE id = ? AND gold_certificate_id = ?
+            `).get(itemId, certId);
 
-        if (Object.keys(updates).length === 0) return { changes: 0 };
+            if (!currentItem) throw new Error('Item not found');
 
-        const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-        const values = [...Object.values(updates), itemId, certId];
+            // 2. Re-calculate with new updates
+            const mergedInput = { ...currentItem, ...updates };
+            const calculated = CertificateCalculationService.calculateGoldItem({
+                ...mergedInput,
+                is_returned: mergedInput.returned == 1
+            });
 
-        return this.db.prepare(`
-            UPDATE gold_certificate_item SET ${fields}
-            WHERE id = ? AND gold_certificate_id = ? AND deletedon IS NULL
-        `).run(...values);
+            // 3. Update database
+            const fieldsToUpdate = {
+                item_type: mergedInput.item_type,
+                name: mergedInput.name,
+                gross_weight: calculated.gross_weight,
+                test_weight: calculated.test_weight,
+                net_weight: calculated.net_weight,
+                purity: calculated.purity,
+                rate_per_gram: calculated.rate_per_gram,
+                fine_weight: calculated.fine_weight,
+                item_total: calculated.item_total,
+                returned: calculated.is_returned ? 1 : 0,
+                certificate_number: mergedInput.certificate_number
+            };
+
+            const fields = Object.keys(fieldsToUpdate).map(k => `${k} = ?`).join(', ');
+            const values = [...Object.values(fieldsToUpdate), itemId, certId];
+
+            this.db.prepare(`
+                UPDATE gold_certificate_item SET ${fields}
+                WHERE id = ? AND gold_certificate_id = ? AND deletedon IS NULL
+            `).run(...values);
+
+            // 4. Update parent roll-up
+            CertificateCalculationService.updateCertificateTotals(certId, this.db);
+
+            return { success: true };
+        })();
     }
 
     softDelete(id) {

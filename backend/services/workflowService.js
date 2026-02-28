@@ -1,4 +1,7 @@
 const { db } = require('../db/db');
+const goldTestService = require('./goldTestService');
+const silverTestService = require('./silverTestService');
+const certificateService = require('./certificateService');
 
 class WorkflowService {
     async getAllItems() {
@@ -6,7 +9,7 @@ class WorkflowService {
             SELECT 
                 'gold' as type, gt.id, gt.customer_id, gt.status, 
                 'Gold Test' as description, 
-                gt.total as total_amount, gt.created as createdon, 
+                gt.total as total, gt.mode_of_payment, gt.created as createdon, 
                 c.name as customer_name
             FROM gold_test gt
             JOIN customer c ON gt.customer_id = c.id
@@ -17,7 +20,7 @@ class WorkflowService {
             SELECT 
                 'silver' as type, st.id, st.customer_id, st.status, 
                 'Silver Test' as description, 
-                st.total as total_amount, st.created as createdon, 
+                st.total as total, st.mode_of_payment, st.created as createdon, 
                 c.name as customer_name
             FROM silver_test st
             JOIN customer c ON st.customer_id = c.id
@@ -28,7 +31,7 @@ class WorkflowService {
             SELECT 
                 'gold_cert' as type, gc.id, gc.customer_id, gc.status,
                 'Gold Certificate' as description,
-                gc.total as total_amount, gc.created as createdon,
+                gc.total as total, gc.mode_of_payment, gc.created as createdon,
                 c.name as customer_name
             FROM gold_certificate gc
             JOIN customer c ON gc.customer_id = c.id
@@ -39,7 +42,7 @@ class WorkflowService {
             SELECT 
                 'silver_cert' as type, sc.id, sc.customer_id, sc.status,
                 'Silver Certificate' as description,
-                0 as total_amount, sc.created as createdon,
+                sc.total as total, sc.mode_of_payment, sc.created as createdon,
                 c.name as customer_name
             FROM silver_certificate sc
             JOIN customer c ON sc.customer_id = c.id
@@ -50,7 +53,7 @@ class WorkflowService {
             SELECT 
                 'photo_cert' as type, pc.id, pc.customer_id, pc.status,
                 'Photo Certificate' as description,
-                pc.total as total_amount, pc.created as createdon,
+                pc.total as total, pc.mode_of_payment, pc.created as createdon,
                 c.name as customer_name
             FROM photo_certificate pc
             JOIN customer c ON pc.customer_id = c.id
@@ -62,22 +65,21 @@ class WorkflowService {
     }
 
     async updateStatus(type, id, status) {
-        let table;
+        // Map frontend type to service type
+        const serviceType = type.replace('_cert', '');
 
-        switch (type) {
-            case 'gold': table = 'gold_test'; break;
-            case 'silver': table = 'silver_test'; break;
-            case 'gold_cert': table = 'gold_certificate'; break;
-            case 'silver_cert': table = 'silver_certificate'; break;
-            case 'photo_cert': table = 'photo_certificate'; break;
-            default: throw new Error('Invalid item type: ' + type);
+        switch (serviceType) {
+            case 'gold':
+                if (type === 'gold') return goldTestService.updateStatus(id, status);
+                return certificateService.updateStatus('gold', id, status);
+            case 'silver':
+                if (type === 'silver') return silverTestService.updateStatus(id, status);
+                return certificateService.updateStatus('silver', id, status);
+            case 'photo':
+                return certificateService.updateStatus('photo', id, status);
+            default:
+                throw new Error('Invalid item type: ' + type);
         }
-
-        const query = `UPDATE ${table} SET status = ?, lastmodified = CURRENT_TIMESTAMP WHERE id = ?`;
-
-        const result = db.prepare(query).run(status, id);
-        if (result.changes === 0) throw new Error('Record not found');
-        return true;
     }
 }
 

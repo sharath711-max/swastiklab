@@ -37,7 +37,7 @@ try {
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/customers', require('./routes/customerRoutes'));
-app.use('/api/certificates', require('./routes/goldCertificateItemRoutes'));
+app.use('/api/certificates/:id', require('./routes/certificateItemRoutes'));
 app.use('/api/certificates', require('./routes/certificateRoutes'));
 app.use('/api/gold-tests', require('./routes/goldTestRoutes'));
 app.use('/api/silver-tests', require('./routes/silverTestRoutes'));
@@ -97,6 +97,6 @@ if (require.main === module) {
         console.log(`🚀 Server running on port ${PORT}`);
     });
 }
-// Trigger restart 3
+// Trigger restart 4
 
 module.exports = app;

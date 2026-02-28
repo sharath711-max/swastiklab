@@ -1,41 +1,55 @@
-const BaseRepository = require('./baseRepository');
-const { db, genId, now } = require('../db/db');
+const { db, now, genId, transaction } = require('../db/db');
 
-class WeightLossHistoryRepository extends BaseRepository {
+class WeightLossHistoryRepository {
     constructor() {
-        super('weight_loss_history');
+        this.db = db;
     }
 
-    create(data) {
-        const { customer_id, amount, mode_of_payment = 'Cash', reason } = data;
-        const id = genId('WLH');
-        const timestamp = now();
+    /**
+     * Append a new weight loss record
+     */
+    async create(data) {
+        const { customer_id, amount, reason } = data;
 
-        this.db.prepare(`
-            INSERT INTO weight_loss_history (id, customer_id, amount, mode_of_payment, reason, createdon)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).run(id, customer_id, amount, mode_of_payment, reason, timestamp);
+        return transaction(() => {
+            const id = genId('WLH');
+            const timestamp = now();
 
-        return { id, ...data, createdon: timestamp };
+            this.db.prepare(`
+                INSERT INTO weight_loss_history (id, customer_id, amount, reason, created)
+                VALUES (?, ?, ?, ?, ?)
+            `).run(id, customer_id, amount, reason, timestamp);
+
+            return { id, customer_id, amount, reason, created: timestamp };
+        })();
     }
 
-    findAll(filters = {}) {
-        let query = `
-            SELECT wlh.*, c.name as customer_name, c.phone as customer_phone
-            FROM weight_loss_history wlh
-            JOIN customer c ON wlh.customer_id = c.id
-            WHERE wlh.deletedon IS NULL
-        `;
-        const params = [];
+    /**
+     * Find history for a specific customer
+     */
+    findByCustomerId(customer_id, limit = 50, offset = 0) {
+        return this.db.prepare(`
+            SELECT * FROM weight_loss_history 
+            WHERE customer_id = ? 
+            ORDER BY created DESC 
+            LIMIT ? OFFSET ?
+        `).all(customer_id, limit, offset);
+    }
 
-        if (filters.customer_id) { query += " AND wlh.customer_id = ?"; params.push(filters.customer_id); }
-        if (filters.start_date) { query += " AND DATE(wlh.createdon) >= DATE(?)"; params.push(filters.start_date); }
-        if (filters.end_date) { query += " AND DATE(wlh.createdon) <= DATE(?)"; params.push(filters.end_date); }
+    /**
+     * Count history records for a customer
+     */
+    countByCustomerId(customer_id) {
+        return this.db.prepare(`
+            SELECT COUNT(*) as total FROM weight_loss_history WHERE customer_id = ?
+        `).get(customer_id).total;
+    }
 
-        query += " ORDER BY wlh.createdon DESC";
-        if (filters.limit) { query += " LIMIT ? OFFSET ?"; params.push(filters.limit, filters.offset || 0); }
-
-        return this.db.prepare(query).all(...params);
+    /**
+     * Find a single record (Read-Only)
+     */
+    findById(id) {
+        return this.db.prepare(`SELECT * FROM weight_loss_history WHERE id = ?`).get(id);
     }
 }
 

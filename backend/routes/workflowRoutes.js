@@ -5,6 +5,13 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 
 router.use(authMiddleware);
 
+const handleError = (res, error) => {
+    if (error.message.startsWith('409')) {
+        return res.status(409).json({ success: false, error: error.message.replace('409: ', '') });
+    }
+    res.status(400).json({ success: false, error: error.message });
+};
+
 // GET /api/workflow
 router.get('/', async (req, res) => {
     try {
@@ -23,7 +30,7 @@ router.patch('/:type/:id/status', async (req, res) => {
         await workflowService.updateStatus(type, id, status);
         res.json({ success: true, message: 'Status updated' });
     } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        handleError(res, error);
     }
 });
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Table, Form, Row, Col, Alert, Spinner } from 'react-bootstrap';
 import { FaTruck, FaSave, FaCheckCircle } from 'react-icons/fa';
 import api from '../services/api';
-import { toast } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 
 const getWeights = (item) => {
     const total = Number(item.sample_weight || 0);
@@ -13,6 +13,7 @@ const getWeights = (item) => {
 };
 
 const PaymentDeliveryModal = ({ show, onHide, testId, onSuccess }) => {
+    const { addToast } = useToast();
     const [test, setTest] = useState(null);
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -87,36 +88,41 @@ const PaymentDeliveryModal = ({ show, onHide, testId, onSuccess }) => {
         setPaymentAmount(amountNum.toFixed(2));
     }, [paymentAmount]);
 
-    const handleSave = async () => {
+    const handleSave = async (e) => {
+        if (e) e.preventDefault();
+
         if (!itemsValid) {
-            toast.error('Please ensure all items have valid purity (0-100%).');
+            addToast('Please ensure all items have valid purity (0-100%).', 'error');
             return;
         }
         if (!paymentValid) {
-            toast.error('Please enter valid payment details.');
+            addToast('Please enter valid payment details.', 'error');
             return;
         }
+
 
         setSaving(true);
         try {
             await api.post(`/gold-tests/${testId}/results`, buildResultsPayload());
-            toast.success('Payment details saved in Tested status.');
+            addToast('Payment details saved in Tested status.', 'success');
             if (onSuccess) onSuccess();
             onHide();
         } catch (err) {
-            toast.error(err.response?.data?.error || 'Failed to save payment details');
+            addToast(err.response?.data?.error || 'Failed to save payment details', 'error');
         } finally {
             setSaving(false);
         }
     };
 
-    const handleSubmit = async () => {
+    const handleSubmit = async (e) => {
+        if (e) e.preventDefault();
+
         if (!itemsValid) {
-            toast.error('Please ensure all items have valid purity (0-100%).');
+            addToast('Please ensure all items have valid purity (0-100%).', 'error');
             return;
         }
         if (!paymentValid) {
-            toast.error('Please enter valid payment details.');
+            addToast('Please enter valid payment details.', 'error');
             return;
         }
 
@@ -128,11 +134,11 @@ const PaymentDeliveryModal = ({ show, onHide, testId, onSuccess }) => {
                 mode_of_payment: modeOfPayment,
                 weight_loss: 0
             });
-            toast.success('Payment submitted. Card moved to Completed.');
+            addToast('Payment submitted. Card moved to Completed.', 'success');
             if (onSuccess) onSuccess();
             onHide();
         } catch (err) {
-            toast.error(err.response?.data?.error || 'Delivery failed');
+            addToast(err.response?.data?.error || 'Delivery failed', 'error');
         } finally {
             setSubmitting(false);
         }
@@ -141,68 +147,67 @@ const PaymentDeliveryModal = ({ show, onHide, testId, onSuccess }) => {
     if (!show) return null;
 
     return (
-        <Modal show={show} onHide={onHide} size="lg" backdrop="static" keyboard={false} className="payment-delivery-modal">
-            <Modal.Header closeButton className="modal-soft-header">
-                <Modal.Title>
-                    <FaTruck className="me-2 text-primary" />
-                    Payment Details
+        <Modal show={show} onHide={onHide} size="lg" backdrop="static" keyboard={false} className="payment-delivery-modal" centered>
+            <Modal.Header closeButton style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', padding: '1.5rem 2rem' }}>
+                <Modal.Title className="fw-bold">
+                    <FaTruck className="me-2 text-white" />
+                    Finalize & Payment
+                    <span className="ms-2 opacity-75 h6 mb-0">({test.id})</span>
                 </Modal.Title>
             </Modal.Header>
             <Modal.Body className="p-0">
                 {loading || !test ? (
-                    <div className="text-center py-5"><Spinner animation="border" /></div>
+                    <div className="text-center py-5"><Spinner animation="border" variant="primary" /></div>
                 ) : (
                     <>
-                        <div className="bg-light p-3 border-bottom">
-                            <Row className="g-3">
+                        <div className="p-4 border-bottom" style={{ background: '#f8fafc' }}>
+                            <Row className="g-4">
                                 <Col md={4}>
-                                    <small className="text-muted d-block uppercase fw-bold" style={{ fontSize: '0.75rem' }}>INVOICE NUMBER</small>
-                                    <span className="fw-bold text-dark">{test.id}</span>
+                                    <div className="text-muted fw-bold small mb-1">CUSTOMER</div>
+                                    <div className="h5 fw-bold text-dark mb-0">{test.customer_name}</div>
                                 </Col>
                                 <Col md={4}>
-                                    <small className="text-muted d-block uppercase fw-bold" style={{ fontSize: '0.75rem' }}>CUSTOMER</small>
-                                    <span className="fw-bold text-dark">{test.customer_name}</span>
+                                    <div className="text-muted fw-bold small mb-1">DATE</div>
+                                    <div className="fw-bold text-dark">{new Date(test.created_at).toLocaleDateString()}</div>
                                 </Col>
-                                <Col md={4} className="text-end">
-                                    <small className="text-muted d-block uppercase fw-bold" style={{ fontSize: '0.75rem' }}>SAMPLE COUNT</small>
-                                    <span className="fw-bold text-primary h5 mb-0">{items.length}</span>
+                                <Col md={4} className="text-md-end">
+                                    <div className="text-muted fw-bold small mb-1">SAMPLE COUNT</div>
+                                    <div className="h4 fw-bold text-primary mb-0">{items.length}</div>
                                 </Col>
                             </Row>
                         </div>
 
                         {error && (
-                            <Alert variant="danger" className="m-3 mb-0 py-2">
+                            <Alert variant="danger" className="m-4 py-3 rounded-4">
                                 {error}
                             </Alert>
                         )}
 
-                        <div className="p-3" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                            <h6 className="mb-3 text-secondary border-bottom pb-2">TESTED ITEMS</h6>
-                            <Table bordered hover size="sm" className="mb-0">
-                                <thead className="table-light">
-                                    <tr>
+                        <div className="p-4" style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                            <h6 className="mb-3 text-secondary border-bottom pb-2 fw-bold uppercase">Item Purity Verification</h6>
+                            <Table borderless hover className="align-middle mb-0">
+                                <thead>
+                                    <tr className="text-muted small uppercase fw-bold" style={{ letterSpacing: '0.05em' }}>
                                         <th style={{ width: '8%' }}>Seq</th>
-                                        <th style={{ width: '25%' }}>Item Name</th>
-                                        <th style={{ width: '12%' }}>Sample (g)</th>
-                                        <th style={{ width: '12%' }}>Total (g)</th>
-                                        <th style={{ width: '12%' }}>Net (g)</th>
-                                        <th style={{ width: '16%' }}>Purity (%)</th>
-                                        <th className="text-center">Returned</th>
-                                        <th className="text-center">Cert Req?</th>
+                                        <th style={{ width: '30%' }}>Item</th>
+                                        <th>Weights (g)</th>
+                                        <th style={{ width: '18%' }}>Purity %</th>
+                                        <th className="text-center">Return</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {items.map((item, idx) => (
-                                        <tr key={item.id}>
-                                            <td className="align-middle">{idx + 1}</td>
-                                            <td className="align-middle">
-                                                <div>{item.item_type}</div>
-                                                <small className="text-muted">{item.item_no || item.item_number || '-'}</small>
+                                        <tr key={item.id} className="border-bottom">
+                                            <td className="py-3 fw-bold text-muted">{idx + 1}</td>
+                                            <td className="py-3">
+                                                <div className="fw-bold text-dark">{item.item_type}</div>
+                                                <small className="text-muted fw-semibold">{item.item_no || item.item_number || '-'}</small>
                                             </td>
-                                            <td className="align-middle">{itemWeights[idx].sample}g</td>
-                                            <td className="align-middle">{itemWeights[idx].total}g</td>
-                                            <td className="align-middle">{itemWeights[idx].net}g</td>
-                                            <td className="align-middle">
+                                            <td className="py-3">
+                                                <div className="small fw-semibold text-muted">S: {itemWeights[idx].sample} | T: {itemWeights[idx].total}</div>
+                                                <div className="fw-bold text-dark">NET: {itemWeights[idx].net}g</div>
+                                            </td>
+                                            <td className="py-3">
                                                 <Form.Control
                                                     type="number"
                                                     size="sm"
@@ -210,18 +215,14 @@ const PaymentDeliveryModal = ({ show, onHide, testId, onSuccess }) => {
                                                     onChange={(e) => handleItemChange(idx, 'purity', e.target.value)}
                                                     isInvalid={Number(item.purity) <= 0 || Number(item.purity) > 100}
                                                     step="0.01"
+                                                    style={{ borderRadius: '8px', fontWeight: 700 }}
                                                 />
                                             </td>
-                                            <td className="text-center align-middle">
+                                            <td className="text-center py-3">
                                                 <Form.Check
                                                     checked={!!item.returned}
                                                     onChange={(e) => handleItemChange(idx, 'returned', e.target.checked)}
-                                                />
-                                            </td>
-                                            <td className="text-center align-middle">
-                                                <Form.Check
-                                                    checked={!!item.certificate_required}
-                                                    onChange={(e) => handleItemChange(idx, 'certificate_required', e.target.checked)}
+                                                    style={{ cursor: 'pointer' }}
                                                 />
                                             </td>
                                         </tr>
@@ -232,59 +233,65 @@ const PaymentDeliveryModal = ({ show, onHide, testId, onSuccess }) => {
                     </>
                 )}
             </Modal.Body>
-            <Modal.Footer className="bg-light border-top p-3">
+            <Modal.Footer className="bg-light p-4" style={{ borderTop: '1px solid #e5e7eb' }}>
                 <Row className="w-100 align-items-center g-3">
                     <Col md={3}>
-                        <span className="small fw-bold text-muted d-block mb-1">Amount</span>
+                        <Form.Label className="small fw-bold text-muted uppercase">Final Amount</Form.Label>
                         <Form.Control
-                            size="sm"
+                            size="lg"
                             type="number"
                             step="0.01"
                             value={paymentAmount}
                             onChange={(e) => setPaymentAmount(e.target.value)}
                             onBlur={normalizeAmountOnBlur}
+                            style={{ borderRadius: '12px', fontWeight: 800, border: '2px solid #e2e8f0' }}
                         />
                     </Col>
                     <Col md={3}>
-                        <span className="small fw-bold text-muted d-block mb-1">Payment Mode</span>
+                        <Form.Label className="small fw-bold text-muted uppercase">Payment Mode</Form.Label>
                         <Form.Select
-                            size="sm"
+                            size="lg"
                             value={modeOfPayment}
                             onChange={(e) => setModeOfPayment(e.target.value)}
+                            style={{ borderRadius: '12px', fontWeight: 700, border: '2px solid #e2e8f0' }}
                         >
-                            <option value="Cash">Cash</option>
-                            <option value="UPI">UPI</option>
-                            <option value="Balance">Balance</option>
+                            <option value="Cash">Cash Payment</option>
+                            <option value="UPI">UPI / Online</option>
+                            <option value="Balance">Bank Balance</option>
                         </Form.Select>
                     </Col>
-                    <Col md={6} className="text-end d-flex justify-content-end gap-2">
+                    <Col md={6} className="text-end d-flex justify-content-end gap-3 mt-4 mt-md-0">
                         <Button
-                            variant="outline-primary"
+                            variant="secondary"
                             onClick={handleSave}
                             disabled={loading || saving || submitting || !itemsValid}
-                            className="fw-bold"
+                            className="px-4 py-2 fw-bold"
+                            style={{ borderRadius: '12px' }}
                         >
-                            {saving ? <Spinner size="sm" animation="border" /> : <><FaSave className="me-2" />Save</>}
+                            {saving ? <Spinner size="sm" animation="border" /> : <><FaSave className="me-2" />Save Draft</>}
                         </Button>
                         <Button
                             variant="success"
                             onClick={handleSubmit}
                             disabled={loading || submitting || saving || !itemsValid}
-                            className="fw-bold"
+                            className="px-5 py-2 fw-bold"
+                            style={{ borderRadius: '12px', background: '#10b981', border: 'none' }}
                         >
-                            {submitting ? <Spinner size="sm" animation="border" /> : <><FaCheckCircle className="me-2" />Submit</>}
+                            {submitting ? <Spinner size="sm" animation="border" /> : <><FaCheckCircle className="me-2" />Finalize & Move</>}
                         </Button>
                     </Col>
                 </Row>
             </Modal.Footer>
             <style>{`
                 .payment-delivery-modal .modal-content {
-                    border-radius: 16px;
+                    border-radius: 24px;
                     border: none;
-                    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
+                    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+                    overflow: hidden;
                 }
-                .payment-delivery-modal .modal-soft-header {
-                    background: linear-gradient(135deg, #eff6ff, #eef2ff);
+                .payment-delivery-modal .modal-header .btn-close {
+                    filter: brightness(0) invert(1);
+                    opacity: 0.8;
                 }
             `}</style>
         </Modal>

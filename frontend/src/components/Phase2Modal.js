@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Table, Form, Alert, Badge, Row, Col, Spinner } from 'react-bootstrap';
-import { toast } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 import { FaCamera, FaCopy, FaPrint } from 'react-icons/fa';
 import api from '../services/api';
 
 const CURRENT_SYSTEM = 'LAB';
 
 const getWeights = (item) => {
-    const total = Number(item.sample_weight || 0);
-    const sampleInput = Number(item.test_weight || 0);
-    const sample = Number.isFinite(sampleInput) && sampleInput > 0 ? sampleInput : total;
-    const net = Math.max(0, total - sample);
-    return { total, sample, net };
+    // Priority to gross_weight from schema, fallback to sample_weight/total_weight
+    const gross = Number(item.gross_weight || item.sample_weight || 0);
+    const test = Number(item.test_weight || 0);
+    const net = item.net_weight !== undefined ? Number(item.net_weight) : Math.max(0, gross - test);
+    return { gross, test, net };
 };
 
 const formatDate = (value) => {
@@ -29,9 +29,10 @@ const escapeHtml = (value) => String(value ?? '')
     .replaceAll("'", '&#39;');
 
 const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
+    const { addToast } = useToast();
     const [items, setItems] = useState([]);
     const [modeOfPayment, setModeOfPayment] = useState('Cash');
-    const [amount, setAmount] = useState(0);
+    const [amount, setAmount] = useState('');
     const [includeGst, setIncludeGst] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -43,6 +44,7 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
     const isPhotoCert = test?.type === 'photo_cert' || test?.id?.startsWith('PCR');
     const isGoldTest = test?.type === 'gold' || test?.id?.startsWith('GT');
     const isSilverTest = test?.type === 'silver' || test?.id?.startsWith('ST');
+    const isCertificate = test?.type?.includes('cert') || test?.id?.startsWith('GCR') || test?.id?.startsWith('SCR') || isPhotoCert;
 
     const currentStatus = test?.status || '';
     const isTodoStage = currentStatus === 'TODO';
@@ -58,16 +60,16 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
 
         setItems((test.items || []).map((item) => ({
             ...item,
-            purity: item.purity !== undefined && item.purity !== null ? item.purity : '',
+            purity: (item.purity !== undefined && item.purity !== null && item.purity !== 0 && item.purity !== '0') ? item.purity : '',
             returned: item.returned === 1 || item.returned === true,
             show_kt: item.show_kt === 1 || item.show_kt === true
         })));
         setModeOfPayment(test.mode_of_payment || 'Cash');
-        setAmount(test.total || 0);
+        setAmount(isDoneStage && test.total > 0 ? test.total : '');
         setIncludeGst(test.gst === 1);
         setPhotos({});
         setError('');
-    }, [test]);
+    }, [test, isDoneStage]);
 
     const handleItemChange = (index, field, value) => {
         if (isModalReadOnly) return;
@@ -125,7 +127,7 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
         gst: includeGst ? 1 : 0
     });
 
-    const handleSave = async () => {
+    const handleSave = async (closeModal = true) => {
         const valError = validate();
         if (valError) {
             setError(valError);
@@ -178,6 +180,14 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                 });
             }
 
+            addToast('Results Saved Successfully', 'success');
+            if (onSuccess && closeModal) {
+                onSuccess();
+            }
+            if (closeModal) {
+                onHide();
+            }
+
             return true;
         } catch (err) {
             setError(err.response?.data?.error || err.message || 'Failed to save results');
@@ -192,17 +202,18 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
         const targetLabel = nextStatus === 'IN_PROGRESS' ? 'Tested' : 'Completed';
         if (!window.confirm(`Submit and move this card to ${targetLabel}?`)) return;
 
-        const saved = await handleSave();
+        // Skip closemodal on handlesave to manage it here
+        const saved = await handleSave(false);
         if (!saved) return;
 
         setLoading(true);
         try {
             await api.patch(`/workflow/${test.type}/${test.id}/status`, { status: nextStatus });
-            toast.success(`Moved to ${targetLabel}`);
+            addToast(`Moved to ${targetLabel}`, 'success');
             onSuccess?.();
             onHide();
         } catch (err) {
-            toast.error(err.response?.data?.error || 'Failed to update workflow status');
+            addToast(err.response?.data?.error || 'Failed to update workflow status', 'error');
         } finally {
             setLoading(false);
         }
@@ -239,9 +250,9 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                 document.execCommand('copy');
                 document.body.removeChild(textarea);
             }
-            toast.success('Completed details copied');
+            addToast('Completed details copied', 'success');
         } catch (_err) {
-            toast.error('Unable to copy completed details');
+            addToast('Unable to copy completed details', 'error');
         }
     };
 
@@ -319,8 +330,8 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                         <tr>
                             <th>Seq</th>
                             <th>Item Name</th>
+                            <th>Gross Wt</th>
                             <th>Sample Wt</th>
-                            <th>Total Wt</th>
                             <th>Net Wt</th>
                             <th>Purity (%)</th>
                             {isPhotoCert && <th>Photo</th>}
@@ -339,8 +350,8 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                                         <div>{item.item_type || '-'}</div>
                                         <small className="text-muted">{item.item_no || item.item_number || '-'}</small>
                                     </td>
-                                    <td>{w.sample}g</td>
-                                    <td>{w.total}g</td>
+                                    <td>{w.gross}g</td>
+                                    <td>{w.test}g</td>
                                     <td>{w.net}g</td>
                                     <td style={{ minWidth: 120 }}>
                                         <Form.Control
@@ -349,6 +360,7 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                                             step="0.01"
                                             min="0.01"
                                             max="100"
+                                            placeholder="0.00"
                                             value={item.purity}
                                             onChange={(e) => handleItemChange(idx, 'purity', e.target.value)}
                                             disabled={isModalReadOnly}
@@ -360,7 +372,7 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                                                 {(photos[item.id] || item.media) && (
                                                     <div style={{ width: 40, height: 40, overflow: 'hidden', borderRadius: 4, border: '1px solid #ddd' }}>
                                                         <img
-                                                            src={photos[item.id] ? URL.createObjectURL(photos[item.id]) : `${api.defaults.baseURL}/${item.media}`}
+                                                            src={photos[item.id] ? URL.createObjectURL(photos[item.id]) : `${api.defaults.baseURL.replace(/\/api$/, '')}/${item.media}`}
                                                             alt=""
                                                             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                                                         />
@@ -428,6 +440,7 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                                         type="number"
                                         min="0"
                                         step="0.01"
+                                        placeholder="0.00"
                                         value={amount}
                                         onChange={(e) => setAmount(e.target.value)}
                                         disabled={isModalReadOnly}
@@ -449,17 +462,19 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                                     </Form.Select>
                                 </Form.Group>
                             </Col>
-                            <Col md={4}>
-                                <Form.Check
-                                    type="switch"
-                                    id="gst-switch-phase2"
-                                    label="Include GST"
-                                    checked={includeGst}
-                                    onChange={(e) => setIncludeGst(e.target.checked)}
-                                    disabled={isModalReadOnly}
-                                    className="fw-bold mb-2"
-                                />
-                            </Col>
+                            {isCertificate && (
+                                <Col md={4}>
+                                    <Form.Check
+                                        type="switch"
+                                        id="gst-switch-phase2"
+                                        label="Include GST"
+                                        checked={includeGst}
+                                        onChange={(e) => setIncludeGst(e.target.checked)}
+                                        disabled={isModalReadOnly}
+                                        className="fw-bold mb-2 mt-4"
+                                    />
+                                </Col>
+                            )}
                         </Row>
                     </div>
                 )}
@@ -471,7 +486,7 @@ const Phase2Modal = ({ show, onHide, test, onSuccess, readOnly = false }) => {
                     <>
                         <Button
                             variant="primary"
-                            onClick={() => handleSave().then((ok) => ok && toast.success('Saved'))}
+                            onClick={() => handleSave().then((ok) => ok && addToast('Saved', 'success'))}
                             disabled={loading}
                         >
                             {loading ? <Spinner animation="border" size="sm" /> : 'Save'}

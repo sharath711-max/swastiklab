@@ -1,41 +1,85 @@
-const BaseRepository = require('./baseRepository');
-const { db, genId, now } = require('../db/db');
+const { db, now, genId, transaction } = require('../db/db');
 
-class CreditHistoryRepository extends BaseRepository {
+class CreditHistoryRepository {
     constructor() {
-        super('credit_history');
+        this.db = db;
     }
 
-    create(data) {
-        const { customer_id, amount, type, mode_of_payment = 'Cash', previous_balance = 0, description } = data;
-        const id = genId('CRD');
-        const timestamp = now();
+    /**
+     * Append a new transaction to the ledger
+     */
+    async create(data) {
+        const { customer_id, amount, type, mode_of_payment, description } = data;
+
+        return transaction(() => {
+            const id = genId('CHS');
+            const timestamp = now();
+
+            // 1. Insert into credit_history (Append-Only)
+            this.db.prepare(`
+                INSERT INTO credit_history (id, customer_id, amount, type, mode_of_payment, description, created)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(id, customer_id, amount, type, mode_of_payment, description, timestamp);
+
+            // 2. Trigger Balance Roll-up
+            this.updateCustomerBalance(customer_id);
+
+            return { id, customer_id, amount, type, mode_of_payment, description, created: timestamp };
+        })();
+    }
+
+    /**
+     * Informational roll-up of history records to update customer balance
+     * Formula: Balance = SUM(DEBIT) - SUM(CREDIT)
+     * DEBIT: Customer owes us more (+)
+     * CREDIT: Customer paid us / returned goods (-)
+     */
+    updateCustomerBalance(customer_id) {
+        const result = this.db.prepare(`
+            SELECT 
+                COALESCE(SUM(CASE WHEN type = 'DEBIT' THEN amount ELSE 0 END), 0) as total_debit,
+                COALESCE(SUM(CASE WHEN type = 'CREDIT' THEN amount ELSE 0 END), 0) as total_credit
+            FROM credit_history
+            WHERE customer_id = ?
+        `).get(customer_id);
+
+        const newBalance = result.total_debit - result.total_credit;
 
         this.db.prepare(`
-            INSERT INTO credit_history (id, customer_id, amount, type, mode_of_payment, previous_balance, description, createdon)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, customer_id, amount, type, mode_of_payment, previous_balance, description, timestamp);
+            UPDATE customer 
+            SET balance = ?, lastmodified = ? 
+            WHERE id = ?
+        `).run(newBalance, now(), customer_id);
 
-        return { id, ...data, createdon: timestamp };
+        return newBalance;
     }
 
-    findAll(filters = {}) {
-        let query = `
-            SELECT ch.*, c.name as customer_name, c.phone as customer_phone
-            FROM credit_history ch
-            JOIN customer c ON ch.customer_id = c.id
-            WHERE ch.deletedon IS NULL
-        `;
-        const params = [];
+    /**
+     * Find history for a specific customer
+     */
+    findByCustomerId(customer_id, limit = 50, offset = 0) {
+        return this.db.prepare(`
+            SELECT * FROM credit_history 
+            WHERE customer_id = ? 
+            ORDER BY created DESC 
+            LIMIT ? OFFSET ?
+        `).all(customer_id, limit, offset);
+    }
 
-        if (filters.customer_id) { query += " AND ch.customer_id = ?"; params.push(filters.customer_id); }
-        if (filters.start_date) { query += " AND DATE(ch.createdon) >= DATE(?)"; params.push(filters.start_date); }
-        if (filters.end_date) { query += " AND DATE(ch.createdon) <= DATE(?)"; params.push(filters.end_date); }
+    /**
+     * Count history records for a customer
+     */
+    countByCustomerId(customer_id) {
+        return this.db.prepare(`
+            SELECT COUNT(*) as total FROM credit_history WHERE customer_id = ?
+        `).get(customer_id).total;
+    }
 
-        query += " ORDER BY ch.createdon DESC";
-        if (filters.limit) { query += " LIMIT ? OFFSET ?"; params.push(filters.limit, filters.offset || 0); }
-
-        return this.db.prepare(query).all(...params);
+    /**
+     * Find a single transaction record (Read-Only)
+     */
+    findById(id) {
+        return this.db.prepare(`SELECT * FROM credit_history WHERE id = ?`).get(id);
     }
 }
 

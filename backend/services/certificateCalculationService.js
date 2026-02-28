@@ -35,11 +35,11 @@ class CertificateCalculationService {
             errors.push('Test weight cannot be negative');
         }
 
-        if (new Decimal(test_weight).gt(new Decimal(gross_weight))) {
+        if (new Decimal(test_weight || 0).gt(new Decimal(gross_weight || 0))) {
             errors.push('Test weight cannot exceed gross weight');
         }
 
-        if (!purity || purity < 0 || purity > 100) {
+        if (purity === undefined || purity < 0 || purity > 100) {
             errors.push('Purity must be between 0 and 100%');
         }
 
@@ -57,26 +57,21 @@ class CertificateCalculationService {
         const purityDec = new Decimal(purity);
         const rate = new Decimal(rate_per_gram);
 
-        // Net weight = Gross - Test (to 3 decimal places)
+        // Net weight = Gross - Test (rounded to 3 decimal places)
         const net_weight = gross.minus(test)
-            .toDecimalPlaces(3)
-            .toNumber();
+            .toDecimalPlaces(3, Decimal.ROUND_HALF_UP);
 
-        // Fine weight = Net weight × (Purity/100) (to 3 decimal places)
-        const fine_weight = gross
-            .minus(test)
-            .times(purityDec.dividedBy(100))
-            .toDecimalPlaces(3)
-            .toNumber();
+        // Fine weight = Net Weight × (Purity / 100) (rounded to 3 decimal places)
+        const fine_weight = net_weight.times(purityDec.dividedBy(100))
+            .toDecimalPlaces(3, Decimal.ROUND_HALF_UP);
 
-        // Item total = Fine weight × Rate per gram (to 2 decimal places)
-        // Returned items have ZERO value
-        const item_total = is_returned ? 0 : gross
-            .minus(test)
-            .times(purityDec.dividedBy(100))
-            .times(rate)
-            .toDecimalPlaces(2)
-            .toNumber();
+        // Item total = Fine Weight × Rate per Gram (rounded to 2 decimal places)
+        // If an item is marked as returned, the item_total is strictly 0.
+        let item_total = new Decimal(0);
+        if (!is_returned) {
+            item_total = fine_weight.times(rate)
+                .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        }
 
         // 3. RETURN AUTHORITATIVE VALUES
         return {
@@ -87,18 +82,63 @@ class CertificateCalculationService {
             rate_per_gram: rate.toNumber(),
 
             // Calculated outputs (authoritative)
-            net_weight,
-            fine_weight,
-            item_total,
+            net_weight: net_weight.toNumber(),
+            fine_weight: fine_weight.toNumber(),
+            item_total: item_total.toNumber(),
 
             // Metadata
             is_returned: Boolean(is_returned),
             item_name,
             calculated_at: new Date().toISOString(),
-            calculation_version: '1.0.0'
+            calculation_version: '1.1.0'
         };
     }
 
+    /**
+     * Calculate silver item values
+     * @param {Object} input
+     * @returns {Object}
+     */
+    static calculateSilverItem(input) {
+        const {
+            gross_weight,
+            test_weight = 0,
+            purity = 0,
+            is_returned = false,
+            item_name = 'Silver Item'
+        } = input;
+
+        const errors = [];
+        if (!gross_weight || gross_weight <= 0) errors.push('Gross weight must be > 0');
+        if (test_weight < 0) errors.push('Test weight cannot be negative');
+        if (new Decimal(test_weight).gt(new Decimal(gross_weight))) errors.push('Test weight cannot exceed gross weight');
+        if (purity < 0 || purity > 100) errors.push('Purity must be between 0 and 100%');
+
+        if (errors.length > 0) {
+            throw new ValidationError('Silver item validation failed', errors);
+        }
+
+        const gross = new Decimal(gross_weight);
+        const test = new Decimal(test_weight);
+        const purityDec = new Decimal(purity);
+
+        // Net weight = Gross - Test
+        const net_weight = gross.minus(test).toDecimalPlaces(3, Decimal.ROUND_HALF_UP);
+
+        // Fine weight = Net Weight * (Purity / 100)
+        const fine_weight = net_weight.times(purityDec.dividedBy(100)).toDecimalPlaces(3, Decimal.ROUND_HALF_UP);
+
+        return {
+            gross_weight: gross.toNumber(),
+            test_weight: test.toNumber(),
+            net_weight: net_weight.toNumber(),
+            purity: purityDec.toNumber(),
+            fine_weight: fine_weight.toNumber(),
+            is_returned: Boolean(is_returned),
+            item_name,
+            calculated_at: new Date().toISOString()
+        };
+    }
     /**
      * Update parent certificate roll-up totals
      * Salesforce-style Master-Detail roll-up
@@ -117,53 +157,83 @@ class CertificateCalculationService {
             itemTable = 'photo_certificate_item';
         }
 
-        // Get all non-returned items for this certificate
+        // 1. Check Immutability
+        const parent = db.prepare(`SELECT status FROM ${tableName} WHERE id = ?`).get(certificateId);
+        if (parent && parent.status === 'DONE') {
+            // Immutable, but we return current totals
+            return this.getCurrentTotals(certificateId, tableName, itemTable, db);
+        }
+
+        // 2. Roll-up Calculation
+        // Total Weights: Roll up total_net_weight from all associated items (non-deleted)
         const items = db.prepare(`
             SELECT 
                 COUNT(*) as item_count,
-                COALESCE(SUM(item_total), 0) as grand_total,
-                COALESCE(SUM(net_weight), 0) as total_net_weight,
-                COALESCE(SUM(fine_weight), 0) as total_fine_weight
+                COALESCE(SUM(net_weight), 0) as total_net_weight
             FROM ${itemTable}
             WHERE 
                 ${tableName}_id = ? 
-                AND deletedon IS NULL 
-                AND returned = 0
+                AND deletedon IS NULL
         `).get(certificateId);
 
-        // Update parent certificate
-        // Note: gold_certificate only has 'total' column for amount.
-        // silver_certificate does NOT have 'total' column.
-        // photo_certificate has 'total'.
-        if (idPrefix === 'SCR') {
+        // 3. Update Parent
+        const now = new Date().toISOString();
+
+        if (idPrefix === 'GCR') {
+            db.prepare(`
+                UPDATE gold_certificate 
+                SET 
+                    total_net_weight = ?,
+                    lastmodified = ?
+                WHERE id = ?
+            `).run(
+                items.total_net_weight,
+                now,
+                certificateId
+            );
+        } else if (idPrefix === 'SCR') {
+            db.prepare(`
+                UPDATE silver_certificate 
+                SET 
+                    total_net_weight = ?,
+                    lastmodified = ?
+                WHERE id = ?
+            `).run(
+                items.total_net_weight,
+                now,
+                certificateId
+            );
+        } else {
+            // Photo certificate or others
             db.prepare(`
                 UPDATE ${tableName} 
                 SET lastmodified = ?
                 WHERE id = ?
-            `).run(
-                new Date().toISOString(),
-                certificateId
-            );
-        } else {
-            db.prepare(`
-                UPDATE ${tableName} 
-                SET 
-                    total = ?,
-                    lastmodified = ?
-                WHERE id = ?
-            `).run(
-                items.grand_total,
-                new Date().toISOString(),
-                certificateId
-            );
+            `).run(now, certificateId);
         }
 
         return {
-            grand_total: items.grand_total,
             item_count: items.item_count,
-            total_net_weight: items.total_net_weight,
-            total_fine_weight: items.total_fine_weight
+            total_net_weight: items.total_net_weight
         };
+    }
+
+    static getCurrentTotals(certificateId, tableName, itemTable, db) {
+        const result = db.prepare(`
+            SELECT 
+                total as grand_total,
+                (SELECT COUNT(*) FROM ${itemTable} WHERE ${tableName}_id = ? AND deletedon IS NULL) as item_count
+            FROM ${tableName}
+            WHERE id = ?
+        `).get(certificateId, certificateId);
+
+        // For gold, we might have weight columns
+        if (tableName === 'gold_certificate') {
+            const weights = db.prepare(`SELECT total_net_weight, total_fine_weight FROM gold_certificate WHERE id = ?`).get(certificateId);
+            return { ...result, ...weights };
+        }
+
+        return result;
     }
 }
 

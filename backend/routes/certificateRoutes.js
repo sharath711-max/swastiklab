@@ -4,18 +4,37 @@ const certificateService = require('../services/certificateService');
 const upload = require('../middleware/uploadMiddleware');
 const { generateCertificateHTML } = require('../utils/certificateTemplate');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { immutabilityGuard } = require('../middleware/immutabilityGuard');
 
-// Health/Public routes should be above router.use(authMiddleware) if any
-// But for now lab policy is to protect all certificates except the specific print view if needed.
+// We have 3 distinct tableNames to guard based on ID prefixes. We will create a dynamic guard for certificates:
+const dynamicCertGuard = (req, res, next) => {
+    let tableName = null;
+    const id = req.params.id || req.body.id;
+    if (id) {
+        if (id.startsWith('GCR')) tableName = 'gold_certificate';
+        else if (id.startsWith('SCR')) tableName = 'silver_certificate';
+        else if (id.startsWith('PCR')) tableName = 'photo_certificate';
+    }
 
-// GET /api/certificates/:no/print -> KEEP PUBLIC for accessibility (or protect if strict)
-// We'll put it at the BOTTOM and apply middleware to the router now.
+    if (tableName) {
+        return immutabilityGuard(tableName)(req, res, next);
+    }
+    next();
+};
 
-// router.use(authMiddleware);
+router.use(authMiddleware);
+router.use('/:id', dynamicCertGuard);
+
+const handleError = (res, error) => {
+    console.error('Certificate API Error:', error);
+    if (error.message.startsWith('409')) {
+        return res.status(409).json({ success: false, error: error.message.replace('409: ', '') });
+    }
+    res.status(400).json({ success: false, error: error.message });
+};
 
 // GET /api/certificates
-// GET /api/certificates
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req, res) => {
     try {
         const { type, customer_id, status, limit, page } = req.query;
         if (!type) {
@@ -37,10 +56,9 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/certificates/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', authMiddleware, async (req, res) => {
     try {
-        const { type } = req.query; // ID is not unique across tables potentially, though prefixes help.
-        // We can infer type from ID prefix GCR/SCR/PCR
+        const { type } = req.query;
         const id = req.params.id;
         let inferredType = type;
 
@@ -48,7 +66,7 @@ router.get('/:id', async (req, res) => {
             if (id.startsWith('GCR')) inferredType = 'gold';
             else if (id.startsWith('SCR')) inferredType = 'silver';
             else if (id.startsWith('PCR')) inferredType = 'photo';
-            else return res.status(400).json({ error: 'Cannot infer certificate type from ID, please provide type query param' });
+            else return res.status(400).json({ error: 'Cannot infer certificate type from ID' });
         }
 
         const certificate = await certificateService.getCertificate(inferredType, id);
@@ -60,49 +78,35 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/certificates
-router.post('/', async (req, res) => {
+router.post('/', authMiddleware, async (req, res) => {
     try {
         const certificate = await certificateService.generateCertificate(req.body);
         res.status(201).json(certificate);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        handleError(res, error);
     }
 });
 
 // POST /api/certificates/with-photo
-router.post('/with-photo', upload.single('photo'), async (req, res) => {
+router.post('/with-photo', authMiddleware, upload.single('photo'), async (req, res) => {
     try {
-        const data = JSON.parse(req.body.data);
+        let data = req.body;
+        if (req.body.data) {
+            data = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body.data;
+        }
+
         if (req.file) {
-            // For photo certificates, items might need the media. 
-            // The frontend should ideally send items array where one item has this media path.
-            // We'll normalize this: assign the photo path to the first item's media field if it's a photo cert.
-            const photoPath = req.file.path.split('backend')[1] || req.file.path;
-
-            if (data.type !== 'photo') {
-                return res.status(400).json({ error: 'Photo upload is only allowed for Photo Certificates.' });
-            }
-
-            if (data.type === 'photo' && data.items && data.items.length > 0) {
-                data.items.forEach(item => {
-                    item.media = photoPath;
-
-                    // Since Schema lacks weight/purity columns for Photo Certs, append to description
-                    // Frontend sends: item_type, gross_weight, purity
-                    const details = [];
-                    if (item.gross_weight) details.push(`Wt: ${item.gross_weight}g`);
-                    if (item.purity) details.push(`Purity: ${item.purity}%`);
-
-                    if (details.length > 0) {
-                        item.item_type = `${item.item_type || 'Item'} (${details.join(', ')})`;
-                    }
-                });
+            const photoPath = req.file.path.replace(/\\/g, '/').split('backend/')[1] || req.file.path.replace(/\\/g, '/');
+            if (data.items && data.items.length > 0) {
+                data.items[0].media_path = photoPath;
+                data.items[0].media = photoPath;
             }
         }
+
         const certificate = await certificateService.generateCertificate(data);
         res.status(201).json(certificate);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        handleError(res, error);
     }
 });
 
@@ -113,14 +117,19 @@ router.get('/:no/print', async (req, res) => {
         if (!certData) return res.status(404).send('Certificate not found');
 
         // Transform for template
+        const photoItem = certData.items?.find(i => i.media);
         const templateData = {
             ...certData,
             customer: {
                 name: certData.customer_name,
                 phone: certData.customer_phone
             },
-            // Add full URL for image if it exists
-            photo_path: certData.photo_path ? `${req.protocol}://${req.get('host')}${certData.photo_path}` : null
+            photo_path: photoItem ? `${req.protocol}://${req.get('host')}/${photoItem.media}` : null,
+            total_weight: certData.items?.reduce((acc, i) => acc + (parseFloat(i.gross_weight) || 0), 0).toFixed(3),
+            total_amount: certData.total || 0,
+            certificate_no: certData.auto_number,
+            issue_date: certData.created_at,
+            certificate_type: certData.id.startsWith('PCR') ? 'PHOTO' : certData.id.startsWith('GCR') ? 'GOLD' : 'SILVER'
         };
 
         const html = generateCertificateHTML(templateData);
@@ -130,30 +139,24 @@ router.get('/:no/print', async (req, res) => {
     }
 });
 
-
-// POST /api/certificates/:id/results
-router.post('/:id/results', upload.single('photo'), async (req, res) => {
+// POST /api/certificates/:id/results (Handles photo uploads and result saves)
+router.post('/:id/results', authMiddleware, upload.single('photo'), async (req, res) => {
     try {
         const id = req.params.id;
         let data = req.body;
 
-        // If multipart/form-data
         if (req.body.data) {
             data = JSON.parse(req.body.data);
         }
 
         if (req.file) {
-            const photoPath = req.file.path.split('backend')[1];
-            // If photo_item_id is provided, update that item. 
-            // Else if items array exists, maybe update the first one?
-            // Or data.items is the array of updates.
+            // Normalize path for web storage
+            const photoPath = req.file.path.replace(/\\/g, '/').split('backend/')[1] || req.file.path.replace(/\\/g, '/');
 
             if (data.photo_item_id && data.items) {
                 const item = data.items.find(i => i.id === data.photo_item_id);
                 if (item) item.media = photoPath;
             } else if (data.items && data.items.length > 0) {
-                // Fallback: assign to first item if not specified (legacy behavior compat)
-                // But ideally frontend sends photo_item_id
                 data.items[0].media = photoPath;
             }
         }
@@ -168,7 +171,23 @@ router.post('/:id/results', upload.single('photo'), async (req, res) => {
         await certificateService.saveResults(type, id, data);
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        handleError(res, error);
+    }
+});
+
+router.patch('/:id/status', authMiddleware, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { status } = req.body;
+        let type;
+        if (id.startsWith('PCR')) type = 'photo';
+        else if (id.startsWith('GCR')) type = 'gold';
+        else if (id.startsWith('SCR')) type = 'silver';
+
+        await certificateService.updateStatus(type, id, status);
+        res.json({ success: true, message: 'Status updated' });
+    } catch (error) {
+        handleError(res, error);
     }
 });
 

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Form, Button, Alert, Row, Col, Card } from 'react-bootstrap';
+import React, { useState, useEffect } from 'react';
+import { Form, Button, Alert, Row, Col, Card, Badge } from 'react-bootstrap';
 import api from '../services/api';
+import { calculateGoldItem } from '../utils/calculations';
 
 const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
     const [formData, setFormData] = useState({
@@ -10,11 +11,31 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
         rate_per_gram: '',
         item_name: '',
         sub_certificate_number: '',
-        certificate_required: true
+        certificate_required: true,
+        is_returned: false
+    });
+
+    const [preview, setPreview] = useState({
+        net_weight: 0,
+        fine_weight: 0,
+        item_total: 0,
+        isValid: false
     });
 
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [serverResponse, setServerResponse] = useState(null);
+
+    // Real-time preview effect
+    useEffect(() => {
+        const result = calculateGoldItem({
+            gross_weight: formData.gross_weight,
+            test_weight: formData.test_weight,
+            purity: formData.purity,
+            rate_per_gram: formData.rate_per_gram,
+            is_returned: formData.is_returned
+        });
+        setPreview(result);
+    }, [formData]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -22,7 +43,7 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
         setServerResponse(null);
 
         try {
-            // Prepare payload - ONLY raw inputs
+            // Prepare payload - ONLY raw inputs as backend is authoritative
             const payload = {
                 gross_weight: parseFloat(formData.gross_weight),
                 test_weight: parseFloat(formData.test_weight || 0),
@@ -30,7 +51,8 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
                 rate_per_gram: parseFloat(formData.rate_per_gram),
                 item_name: formData.item_name.trim(),
                 sub_certificate_number: formData.sub_certificate_number.trim() || null,
-                certificate_required: formData.certificate_required
+                certificate_required: formData.certificate_required,
+                is_returned: formData.is_returned
             };
 
             const response = await api.post(`/certificates/${certificateId}/items`, payload);
@@ -42,16 +64,15 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
                     data: response.data.data
                 });
 
-                // Reset form
-                setFormData({
+                // Reset form (except rate if they are adding multiple items)
+                setFormData(prev => ({
+                    ...prev,
                     gross_weight: '',
                     test_weight: '',
-                    purity: '91.6',
-                    rate_per_gram: '',
                     item_name: '',
                     sub_certificate_number: '',
-                    certificate_required: true
-                });
+                    is_returned: false
+                }));
 
                 if (onItemAdded) {
                     onItemAdded(response.data.data);
@@ -77,28 +98,32 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
     return (
         <Card className="shadow-sm border-0 mb-4" style={{ borderTop: '4px solid #0176d3' }}>
             <Card.Body>
-                <Card.Title className="mb-3 d-flex align-items-center" style={{ color: '#0176d3' }}>
-                    <span className="me-2">Add Gold Item</span>
-                    <small className="text-muted fw-normal" style={{ fontSize: '0.8rem' }}>(Backend-Calculated)</small>
+                <Card.Title className="mb-3 d-flex justify-content-between align-items-center" style={{ color: '#0176d3' }}>
+                    <span>Add Gold Item</span>
+                    <Badge bg="info" className="fw-normal" style={{ fontSize: '0.7rem' }}>Authorized Calculation</Badge>
                 </Card.Title>
 
-                <p className="text-muted mb-4" style={{ fontSize: '0.9rem' }}>
-                    <strong>Note:</strong> All calculations (net weight, fine weight, value) are performed
-                    by the backend server for accuracy and security.
-                </p>
+                {/* Real-time Preview Panel */}
+                <div className="bg-light p-3 rounded mb-4 border d-flex justify-content-between align-items-center">
+                    <div className="text-center px-2">
+                        <div className="small text-muted text-uppercase fw-bold" style={{ fontSize: '0.65rem' }}>Net Wt</div>
+                        <div className="fw-bold fs-5 text-primary">{preview.net_weight.toFixed(3)}g</div>
+                    </div>
+                    <div className="text-center px-2 border-start border-end">
+                        <div className="small text-muted text-uppercase fw-bold" style={{ fontSize: '0.65rem' }}>Fine Wt</div>
+                        <div className="fw-bold fs-5 text-success">{preview.fine_weight.toFixed(3)}g</div>
+                    </div>
+                    <div className="text-center px-2">
+                        <div className="small text-muted text-uppercase fw-bold" style={{ fontSize: '0.65rem' }}>Item Total</div>
+                        <div className="fw-bold fs-5 text-dark">₹{preview.item_total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                    </div>
+                </div>
 
                 {serverResponse && (
-                    <Alert variant={serverResponse.type} dismissible onClose={() => setServerResponse(null)}>
-                        <div className="fw-bold">{serverResponse.message}</div>
+                    <Alert variant={serverResponse.type} dismissible onClose={() => setServerResponse(null)} className="py-2">
+                        <div className="small fw-bold">{serverResponse.message}</div>
                         {serverResponse.details && (
-                            <div className="small mt-1">{Array.isArray(serverResponse.details) ? serverResponse.details.join(', ') : serverResponse.details}</div>
-                        )}
-                        {serverResponse.data && serverResponse.type === 'success' && (
-                            <div className="mt-2 small pt-2 border-top">
-                                <strong>Calculated:</strong> Net: {serverResponse.data.calculated_values.net_weight}g,
-                                Fine: {serverResponse.data.calculated_values.fine_weight}g,
-                                Value: ₹{serverResponse.data.calculated_values.item_total}
-                            </div>
+                            <div className="x-small mt-1">{Array.isArray(serverResponse.details) ? serverResponse.details.join(', ') : serverResponse.details}</div>
                         )}
                     </Alert>
                 )}
@@ -107,13 +132,13 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
                     <Row className="g-3">
                         <Col md={12}>
                             <Form.Group>
-                                <Form.Label className="small fw-bold">Item Name *</Form.Label>
+                                <Form.Label className="x-small fw-bold text-uppercase text-muted">Item Name *</Form.Label>
                                 <Form.Control
                                     type="text"
                                     size="sm"
                                     value={formData.item_name}
                                     onChange={(e) => setFormData({ ...formData, item_name: e.target.value })}
-                                    placeholder="e.g., Ring, Chain, Bracelet"
+                                    placeholder="e.g., Ring, Chain"
                                     required
                                     disabled={isSubmitting}
                                 />
@@ -122,7 +147,7 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
 
                         <Col md={6}>
                             <Form.Group>
-                                <Form.Label className="small fw-bold">Gross Weight (g) *</Form.Label>
+                                <Form.Label className="x-small fw-bold text-uppercase text-muted">Gross Wt (g) *</Form.Label>
                                 <Form.Control
                                     type="number"
                                     size="sm"
@@ -130,7 +155,7 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
                                     min="0.001"
                                     value={formData.gross_weight}
                                     onChange={(e) => setFormData({ ...formData, gross_weight: e.target.value })}
-                                    placeholder="e.g., 10.500"
+                                    placeholder="0.000"
                                     required
                                     disabled={isSubmitting}
                                 />
@@ -139,7 +164,7 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
 
                         <Col md={6}>
                             <Form.Group>
-                                <Form.Label className="small fw-bold">Test Weight (g)</Form.Label>
+                                <Form.Label className="x-small fw-bold text-uppercase text-muted">Test Wt (g)</Form.Label>
                                 <Form.Control
                                     type="number"
                                     size="sm"
@@ -147,7 +172,7 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
                                     min="0"
                                     value={formData.test_weight}
                                     onChange={(e) => setFormData({ ...formData, test_weight: e.target.value })}
-                                    placeholder="Optional, e.g., 0.250"
+                                    placeholder="0.000"
                                     disabled={isSubmitting}
                                 />
                             </Form.Group>
@@ -155,7 +180,7 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
 
                         <Col md={6}>
                             <Form.Group>
-                                <Form.Label className="small fw-bold">Purity (%) *</Form.Label>
+                                <Form.Label className="x-small fw-bold text-uppercase text-muted">Purity (%) *</Form.Label>
                                 <Form.Select
                                     size="sm"
                                     value={formData.purity}
@@ -173,7 +198,7 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
 
                         <Col md={6}>
                             <Form.Group>
-                                <Form.Label className="small fw-bold">Rate per Gram (₹) *</Form.Label>
+                                <Form.Label className="x-small fw-bold text-uppercase text-muted">Rate (₹/g) *</Form.Label>
                                 <Form.Control
                                     type="number"
                                     size="sm"
@@ -181,57 +206,44 @@ const GoldCertificateItemForm = ({ certificateId, onItemAdded }) => {
                                     min="0.01"
                                     value={formData.rate_per_gram}
                                     onChange={(e) => setFormData({ ...formData, rate_per_gram: e.target.value })}
-                                    placeholder="e.g., 4650.00"
+                                    placeholder="0.00"
                                     required
                                     disabled={isSubmitting}
                                 />
                             </Form.Group>
                         </Col>
 
-                        <Col md={12}>
-                            <Form.Group>
-                                <Form.Label className="small fw-bold">Sub Certificate Number</Form.Label>
-                                <Form.Control
-                                    type="text"
-                                    size="sm"
-                                    value={formData.sub_certificate_number}
-                                    onChange={(e) => setFormData({ ...formData, sub_certificate_number: e.target.value })}
-                                    placeholder="e.g., A01, B12"
-                                    disabled={isSubmitting}
-                                />
-                            </Form.Group>
-                        </Col>
-
-                        <Col md={12}>
+                        <Col md={12} className="d-flex justify-content-between align-items-center pt-2">
                             <Form.Check
                                 type="checkbox"
                                 id="cert-req"
-                                label="Certificate Required"
-                                className="small"
+                                label={<span className="x-small fw-bold text-uppercase text-muted">Cert Required</span>}
                                 checked={formData.certificate_required}
                                 onChange={(e) => setFormData({ ...formData, certificate_required: e.target.checked })}
                                 disabled={isSubmitting}
                             />
+
+                            <Form.Check
+                                type="switch"
+                                id="is-returned"
+                                label={<span className="x-small fw-bold text-uppercase text-muted">Returned</span>}
+                                checked={formData.is_returned}
+                                onChange={(e) => setFormData({ ...formData, is_returned: e.target.checked })}
+                                disabled={isSubmitting}
+                                className="text-danger"
+                            />
                         </Col>
                     </Row>
-
-                    <div className="mt-4 border-top pt-3 d-flex flex-column align-items-center">
-                        <Button
-                            variant="primary"
-                            type="submit"
-                            size="sm"
-                            className="w-100 mb-2 py-2"
-                            disabled={isSubmitting}
-                            style={{ backgroundColor: '#0176d3', borderColor: '#0176d3' }}
-                        >
-                            {isSubmitting ? 'Calculating...' : 'Add Item (Server Calculation)'}
-                        </Button>
-
-                        <small className="text-center text-muted mt-2 px-3" style={{ fontSize: '0.75rem' }}>
-                            <strong>Security Notice:</strong> The server will calculate net weight, fine weight,
-                            and total value to ensure accuracy and prevent manipulation.
-                        </small>
-                    </div>
+                    <Button
+                        variant="primary"
+                        type="submit"
+                        size="sm"
+                        className="w-100 mt-4 py-2 fw-bold text-uppercase"
+                        disabled={isSubmitting || !preview.isValid}
+                        style={{ backgroundColor: '#0176d3', borderColor: '#0176d3', letterSpacing: '0.5px' }}
+                    >
+                        {isSubmitting ? 'Processing...' : 'Add Gold Item'}
+                    </Button>
                 </Form>
             </Card.Body>
         </Card>

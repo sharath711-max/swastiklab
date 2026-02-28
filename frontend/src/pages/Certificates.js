@@ -6,12 +6,13 @@ import {
 import {
     FaPlus, FaSearch, FaPrint, FaCertificate, FaHistory
 } from 'react-icons/fa';
-import { toast, ToastContainer } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 import api from '../services/api';
 import CertificateForm from '../components/CertificateForm';
 import GoldCertificateItemForm from '../components/GoldCertificateItemForm';
 
 const Certificates = () => {
+    const { addToast } = useToast();
     const navigate = useNavigate();
     const location = useLocation();
     const [certificates, setCertificates] = useState([]);
@@ -37,7 +38,7 @@ const Certificates = () => {
             const response = await api.get('/certificates');
             setCertificates(response.data);
         } catch (error) {
-            toast.error('Failed to fetch certificates');
+            addToast('Failed to fetch certificates', 'error');
         } finally {
             setLoading(false);
         }
@@ -53,14 +54,14 @@ const Certificates = () => {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
             if (res.data) {
-                toast.success('Certificate issued successfully');
+                addToast('Certificate issued successfully', 'success');
                 setShowForm(false);
                 fetchCertificates();
                 // Optionally auto-open print view
                 navigate(`/print/certificate/${res.data.certificate_no}`);
             }
         } catch (error) {
-            toast.error('Failed to issue certificate');
+            addToast('Failed to issue certificate', 'error');
         }
     };
 
@@ -71,7 +72,6 @@ const Certificates = () => {
 
     return (
         <Container fluid className="py-4">
-            <ToastContainer />
             <Row className="mb-4 align-items-center">
                 <Col>
                     <h2 style={{ color: 'var(--primary)', fontWeight: 700 }}>
@@ -130,7 +130,7 @@ const Certificates = () => {
                                         </div>
                                     )}
 
-                                    <div className="d-flex gap-2">
+                                    <div className="d-flex gap-2 mb-2">
                                         <Button variant="outline-primary" size="sm" className="flex-grow-1" onClick={() => navigate(`/print/certificate/${cert.certificate_no}`)}>
                                             <FaPrint className="me-1" /> Standard
                                         </Button>
@@ -138,6 +138,13 @@ const Certificates = () => {
                                             <FaPrint className="me-1" /> Small
                                         </Button>
                                     </div>
+                                    <Button
+                                        variant="link"
+                                        className="w-100 text-decoration-none fw-bold"
+                                        onClick={() => navigate(`/record/${cert.certificate_type}s/${cert.id}`)}
+                                    >
+                                        View Details
+                                    </Button>
 
                                     {cert.certificate_type === 'gold' && (
                                         <Button

@@ -2,8 +2,10 @@ const express = require('express');
 const router = express.Router();
 const goldTestService = require('../services/goldTestService');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { immutabilityGuard } = require('../middleware/immutabilityGuard');
 
 router.use(authMiddleware);
+router.use('/:id', immutabilityGuard('gold_test'));
 
 // POST /api/gold-tests
 router.post('/', async (req, res) => {

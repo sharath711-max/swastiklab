@@ -1,103 +1,151 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from './AuthContext';
-import { FaGem, FaUser, FaLock } from 'react-icons/fa';
+import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import { FaGem, FaUser, FaLock, FaFlask, FaSpinner } from 'react-icons/fa';
+import './LoginPage.css';
+
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_TIMEOUT = 30000;
 
 const LoginPage = () => {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [remember, setRemember] = useState(true);
-    const [error, setError] = useState('');
+    const { addToast } = useToast();
     const { login } = useAuth();
     const navigate = useNavigate();
 
-    const handleSubmit = async (e) => {
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const [failedAttempts, setFailedAttempts] = useState(0);
+    const [isLockedOut, setIsLockedOut] = useState(false);
+    const [cooldown, setCooldown] = useState(0);
+    const [fieldErrors, setFieldErrors] = useState({});
+
+    useEffect(() => {
+        let interval;
+        if (isLockedOut && cooldown > 0) {
+            interval = setInterval(() => {
+                setCooldown((prev) => prev - 1);
+            }, 1000);
+        } else if (isLockedOut && cooldown === 0) {
+            setIsLockedOut(false);
+            setFailedAttempts(0);
+        }
+        return () => clearInterval(interval);
+    }, [isLockedOut, cooldown]);
+
+    const handleLogin = async (e) => {
         e.preventDefault();
-        setError('');
+
+        if (isLockedOut) {
+            addToast(`Too many attempts. Please wait ${cooldown} seconds.`, 'error');
+            return;
+        }
+
+        const errors = {};
+        if (!username) errors.username = 'Username is required';
+        if (!password) errors.password = 'Password is required';
+
+        setFieldErrors(errors);
+        if (Object.keys(errors).length > 0) return;
+
         try {
-            await login(username, password, remember);
-            navigate('/');
+            setLoading(true);
+            const data = await login(username, password, true);
+            addToast(`Welcome back, ${data.user.username}`, 'success');
+            navigate(data.user.role === 'admin' ? '/' : '/');
         } catch (err) {
-            setError(err.response?.data?.error || 'Login failed. Please try again.');
+            const currentFails = failedAttempts + 1;
+            setFailedAttempts(currentFails);
+
+            if (currentFails >= MAX_FAILED_ATTEMPTS) {
+                setIsLockedOut(true);
+                setCooldown(LOCKOUT_TIMEOUT / 1000);
+                addToast(`Account locked. Try again in 30 seconds.`, 'error');
+            } else {
+                addToast(err.response?.data?.error || 'Authentication failed. Invalid username or password.', 'error');
+                setFieldErrors({ login: 'Invalid credentials. Please try again.' });
+            }
+        } finally {
+            setLoading(false);
         }
     };
 
     return (
-        <div className="auth-container">
-            <div className="card auth-card" style={{ borderTop: '4px solid var(--primary)' }}>
-                <div className="auth-logo">
-                    <FaGem style={{ fontSize: '32px', color: '#0176d3' }} />
-                    <span style={{ marginLeft: '10px', fontSize: '24px', color: '#0176d3' }}>SWASTIK</span>
-                </div>
-                <div className="auth-subtitle" style={{ textAlign: 'center', color: 'var(--text-secondary)', marginBottom: '2rem' }}>
-                    Gold & Silver Testing Lab
+        <div className="login-auth-container">
+            <div className="login-card">
+                <div className="login-header text-center">
+                    <FaGem size={64} className="lab-icon-glow" />
+                    <h2>SWASTIK LAB</h2>
+                    <p>SwastikCore v2.0 Enterprise</p>
                 </div>
 
-                <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
-                    {error && (
-                        <div className="slds-alert slds-alert_error" style={{ marginBottom: '1rem', textAlign: 'center' }}>
-                            {error}
+                <form onSubmit={handleLogin} noValidate>
+                    {fieldErrors.login && (
+                        <div className="slds-notify slds-notify_alert slds-theme_error mb-4" style={{ borderRadius: '12px' }}>
+                            {fieldErrors.login}
                         </div>
                     )}
 
-                    <div style={{ marginBottom: '1rem' }}>
-                        <label className="form-label">Username</label>
-                        <div style={{ position: 'relative' }}>
-                            <div style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#b0adab' }}>
-                                <FaUser />
-                            </div>
+                    <div className="form-group mb-4">
+                        <label className="form-label">USERNAME</label>
+                        <div className="input-group-custom">
+                            <FaUser className="input-icon" />
                             <input
                                 type="text"
-                                className="form-control"
-                                style={{ paddingLeft: '32px' }}
+                                className={`form-input ${fieldErrors.username ? 'is-invalid' : ''}`}
+                                placeholder="Enter laboratory ID"
                                 value={username}
                                 onChange={(e) => setUsername(e.target.value)}
-                                required
-                                minLength={3}
-                                placeholder="Enter your username"
+                                disabled={isLockedOut || loading}
                             />
+                            {fieldErrors.username && <span className="error-hint">{fieldErrors.username}</span>}
                         </div>
                     </div>
 
-                    <div style={{ marginBottom: '1rem' }}>
-                        <label className="form-label">Password</label>
-                        <div style={{ position: 'relative' }}>
-                            <div style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#b0adab' }}>
-                                <FaLock />
-                            </div>
+                    <div className="form-group mb-4">
+                        <label className="form-label">PASSWORD</label>
+                        <div className="input-group-custom">
+                            <FaLock className="input-icon" />
                             <input
                                 type="password"
-                                className="form-control"
-                                style={{ paddingLeft: '32px' }}
+                                className={`form-input ${fieldErrors.password ? 'is-invalid' : ''}`}
+                                placeholder="Enter secure password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                required
-                                minLength={3}
-                                placeholder="Enter your password"
+                                disabled={isLockedOut || loading}
                             />
+                            {fieldErrors.password && <span className="error-hint">{fieldErrors.password}</span>}
                         </div>
                     </div>
 
-                    <div className="d-flex justify-content-between mb-4" style={{ display: 'flex', alignItems: 'center', marginBottom: '1.5rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <input
-                                id="remember"
-                                type="checkbox"
-                                checked={remember}
-                                onChange={(e) => setRemember(e.target.checked)}
-                                style={{ width: 'auto', margin: 0, cursor: 'pointer' }}
-                            />
-                            <label htmlFor="remember" style={{ margin: 0, fontSize: '13px', cursor: 'pointer', color: 'var(--text-primary)' }}>Remember me</label>
-                        </div>
-                    </div>
-
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%', height: '40px', fontSize: '14px', fontWeight: 'bold' }}>
-                        Log In
+                    <button
+                        type="submit"
+                        className="btn-login"
+                        disabled={isLockedOut || loading}
+                    >
+                        {loading ? (
+                            <FaSpinner className="animate-spin" />
+                        ) : isLockedOut ? (
+                            `LOCKED (${cooldown}s)`
+                        ) : (
+                            <><FaFlask /> ACCESS SYSTEM</>
+                        )}
                     </button>
+
+                    {failedAttempts > 0 && !isLockedOut && (
+                        <div className="text-center mt-3">
+                            <span className="failed-attempt-badge">
+                                Attempts: {failedAttempts} / {MAX_FAILED_ATTEMPTS}
+                            </span>
+                        </div>
+                    )}
                 </form>
 
-                <div style={{ marginTop: '2rem', fontSize: '12px', color: '#888', textAlign: 'center' }}>
-                    &copy; 2024 <span style={{ color: 'var(--primary)', fontWeight: '600' }}>Swastik Lab</span>. All rights reserved.
+                <div className="login-footer">
+                    <span>© 2026 Swastik Lab & Testing Center</span>
+                    <span style={{ fontSize: '10px', opacity: 0.6 }}>PRIVATE LABORATORY ACCESS ONLY</span>
                 </div>
             </div>
         </div>
@@ -105,3 +153,4 @@ const LoginPage = () => {
 };
 
 export default LoginPage;
+

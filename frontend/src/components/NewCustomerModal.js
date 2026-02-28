@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Modal, Button, Form } from 'react-bootstrap';
 import api from '../services/api';
-import { toast } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 
 const NewCustomerModal = ({ show, onHide, onSuccess, customer = null }) => {
+    const { addToast } = useToast();
     const [formData, setFormData] = useState({
         name: '',
         phone: '',
@@ -98,17 +99,28 @@ const NewCustomerModal = ({ show, onHide, onSuccess, customer = null }) => {
             let res;
             if (isEdit) {
                 res = await api.put(`/customers/${customer.id}`, payload);
-                toast.success('Customer Updated Successfully');
+                addToast('Customer Updated Successfully', 'success');
             } else {
                 res = await api.post('/customers', payload);
-                toast.success('Customer Created Successfully');
+                addToast('Customer Created Successfully', 'success');
             }
 
             if (onSuccess) onSuccess(res.data.data || res.data);
+
+            // Explicitly Close ONLY after success
             onHide();
         } catch (error) {
             console.error('Submit Error:', error);
-            toast.error(error.response?.data?.error || `Failed to ${isEdit ? 'update' : 'create'} customer`);
+            const serverError = error.response?.data?.error || '';
+
+            if (serverError.toLowerCase().includes('phone already exists')) {
+                setErrors(prev => ({ ...prev, phone: 'This phone number is already registered' }));
+                setTouched(prev => ({ ...prev, phone: true }));
+                addToast('Customer with this phone already exists', 'warning');
+            } else {
+                addToast(serverError || `Failed to ${isEdit ? 'update' : 'create'} customer`, 'error');
+            }
+            // Note: Does not call onHide(), leaving the modal open for user correction
         } finally {
             setLoading(false);
         }

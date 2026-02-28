@@ -1,46 +1,31 @@
-import React, { createContext, useState, useContext, useCallback } from 'react';
-import Toast from '../components/Toast';
+import React, { createContext, useContext, useCallback } from 'react';
+import { toast as rtToast } from 'react-toastify';
 
 const ToastContext = createContext(null);
 
 export const ToastProvider = ({ children }) => {
-    const [toasts, setToasts] = useState([]);
-
-    const removeToast = useCallback((id) => {
-        setToasts(prev => prev.filter(toast => toast.id !== id));
-    }, []);
-
     const addToast = useCallback((message, type = 'info', duration = 5000) => {
-        const id = Date.now();
-        setToasts(prev => [...prev, { id, message, type, duration }]);
+        const options = {
+            autoClose: duration || 5000,
+            position: "top-right",
+            pauseOnHover: true,
+            draggable: true
+        };
 
-        if (duration > 0) {
-            setTimeout(() => {
-                removeToast(id);
-            }, duration);
+        switch (type) {
+            case 'success': rtToast.success(message, options); break;
+            case 'error': rtToast.error(message, options); break;
+            case 'warning': rtToast.warn(message, options); break;
+            default: rtToast.info(message, options); break;
         }
-
-        return id;
-    }, [removeToast]);
-
-    const clearAllToasts = useCallback(() => {
-        setToasts([]);
     }, []);
+
+    const removeToast = useCallback(() => { }, []);
+    const clearAllToasts = useCallback(() => { }, []);
 
     return (
         <ToastContext.Provider value={{ addToast, removeToast, clearAllToasts }}>
             {children}
-            <div className="toast-container-global">
-                {toasts.map(toast => (
-                    <Toast
-                        key={toast.id}
-                        id={toast.id}
-                        message={toast.message}
-                        type={toast.type}
-                        onClose={() => removeToast(toast.id)}
-                    />
-                ))}
-            </div>
         </ToastContext.Provider>
     );
 };

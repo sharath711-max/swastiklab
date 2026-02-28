@@ -4,8 +4,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Container, Card, Nav, Tab, Row, Col, Badge, Button, Accordion, Table, Spinner } from 'react-bootstrap';
 import { FaPhone, FaArrowLeft, FaEdit, FaCheckCircle, FaTimesCircle } from 'react-icons/fa';
 import api from '../services/api';
-import { toast } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 import NewCustomerModal from '../components/NewCustomerModal';
+import NewCreditHistoryModal from '../components/NewCreditHistoryModal';
+import NewWeightLossHistoryModal from '../components/NewWeightLossHistoryModal';
+import { FaPlus } from 'react-icons/fa';
 
 // Helper to format currency
 const formatCurrency = (amount) => {
@@ -46,6 +49,7 @@ const RelatedList = ({ title, data, columns, emptyMessage }) => {
 };
 
 const CustomerProfile = () => {
+    const { addToast } = useToast();
     const { id } = useParams();
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('details');
@@ -63,6 +67,8 @@ const CustomerProfile = () => {
     });
     const [loadingRelated, setLoadingRelated] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
+    const [showCHModal, setShowCHModal] = useState(false);
+    const [showWLHModal, setShowWLHModal] = useState(false);
 
     const fetchCustomer = useCallback(async () => {
         setLoadingCustomer(true);
@@ -71,14 +77,14 @@ const CustomerProfile = () => {
             setCustomer(res.data);
         } catch (error) {
             console.error('Error fetching customer:', error);
-            toast.error('Failed to load customer profile');
+            addToast('Failed to load customer profile', 'error');
         } finally {
             setLoadingCustomer(false);
         }
     }, [id]);
 
-    const fetchRelatedData = useCallback(async () => {
-        if (relatedData.loaded) return;
+    const fetchRelatedData = useCallback(async (force = false) => {
+        if (relatedData.loaded && !force) return;
 
         setLoadingRelated(true);
         try {
@@ -104,7 +110,7 @@ const CustomerProfile = () => {
             });
         } catch (error) {
             console.error('Error fetching related data:', error);
-            toast.error('Failed to load related records');
+            addToast('Failed to load related records', 'error');
         } finally {
             setLoadingRelated(false);
         }
@@ -307,7 +313,22 @@ const CustomerProfile = () => {
                                         </Accordion.Item>
 
                                         <Accordion.Item eventKey="5">
-                                            <Accordion.Header>Credit History ({relatedData.creditHistory.length})</Accordion.Header>
+                                            <Accordion.Header>
+                                                <div className="d-flex justify-content-between align-items-center w-100 me-3">
+                                                    <span>Credit History ({relatedData.creditHistory.length})</span>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="primary"
+                                                        className="py-0 px-2"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setShowCHModal(true);
+                                                        }}
+                                                    >
+                                                        <FaPlus size={10} className="me-1" /> Add
+                                                    </Button>
+                                                </div>
+                                            </Accordion.Header>
                                             <Accordion.Body>
                                                 <RelatedList
                                                     title="Credit History"
@@ -325,7 +346,22 @@ const CustomerProfile = () => {
                                         </Accordion.Item>
 
                                         <Accordion.Item eventKey="6">
-                                            <Accordion.Header>Weight Loss History ({relatedData.weightLoss.length})</Accordion.Header>
+                                            <Accordion.Header>
+                                                <div className="d-flex justify-content-between align-items-center w-100 me-3">
+                                                    <span>Weight Loss History ({relatedData.weightLoss.length})</span>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="primary"
+                                                        className="py-0 px-2"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setShowWLHModal(true);
+                                                        }}
+                                                    >
+                                                        <FaPlus size={10} className="me-1" /> Add
+                                                    </Button>
+                                                </div>
+                                            </Accordion.Header>
                                             <Accordion.Body>
                                                 <RelatedList
                                                     title="Weight Loss History"
@@ -356,6 +392,29 @@ const CustomerProfile = () => {
                 onSuccess={(updatedCustomer) => {
                     setCustomer(updatedCustomer);
                     fetchCustomer();
+                }}
+            />
+            {/* Credit History Modal */}
+            <NewCreditHistoryModal
+                show={showCHModal}
+                onHide={() => setShowCHModal(false)}
+                customerId={id}
+                onSuccess={() => {
+                    fetchCustomer(); // Update balance
+                    setRelatedData(prev => ({ ...prev, loaded: false })); // Force reload history
+                    setActiveTab('related');
+                    fetchRelatedData(true);
+                }}
+            />
+            {/* Weight Loss History Modal */}
+            <NewWeightLossHistoryModal
+                show={showWLHModal}
+                onHide={() => setShowWLHModal(false)}
+                customerId={id}
+                onSuccess={() => {
+                    setRelatedData(prev => ({ ...prev, loaded: false })); // Force reload history
+                    setActiveTab('related');
+                    fetchRelatedData(true);
                 }}
             />
         </Container>

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Button, Badge, Spinner, Container, Row, Col, Modal, Table } from 'react-bootstrap';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Button, Spinner, Container, Row, Col, Modal, Table } from 'react-bootstrap';
 import { FaPlus, FaSync, FaCheckDouble, FaSave, FaCheckCircle, FaPrint, FaCopy } from 'react-icons/fa';
-import { toast } from 'react-toastify';
+import { useToast } from '../contexts/ToastContext';
 import api from '../services/api';
 import NewGoldTestModal from '../components/NewGoldTestModal';
 import PaymentDeliveryModal from '../components/PaymentDeliveryModal';
@@ -37,96 +37,175 @@ const boardStyles = {
     page: {
         background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
         minHeight: '100vh',
-        padding: '1.5rem'
+        padding: '2.5rem 2rem',
+        fontFamily: "'Inter', system-ui, -apple-system, sans-serif"
+    },
+    headerWrap: {
+        textAlign: 'center',
+        color: '#ffffff',
+        marginBottom: '3rem',
+        position: 'relative'
     },
     headerTitle: {
+        fontSize: '3rem',
         fontWeight: 800,
-        marginBottom: '0.25rem',
-        color: '#ffffff'
+        marginBottom: '0.5rem',
+        textShadow: '0 4px 12px rgba(0,0,0,0.2)',
+        letterSpacing: '-0.02em'
     },
     headerSub: {
+        fontSize: '1.2rem',
         color: 'rgba(255, 255, 255, 0.9)',
-        marginBottom: 0
+        fontWeight: 500,
+        maxWidth: '700px',
+        margin: '0 auto'
     },
     columnWrap: {
-        background: 'rgba(255, 255, 255, 0.92)',
-        borderRadius: '14px',
-        boxShadow: '0 10px 24px rgba(15, 23, 42, 0.18)',
-        overflow: 'hidden',
-        minHeight: '72vh'
+        background: 'rgba(255, 255, 255, 0.95)',
+        backdropFilter: 'blur(10px)',
+        borderRadius: '20px',
+        padding: '1.5rem',
+        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.15)',
+        minHeight: '75vh',
+        border: '1px solid rgba(255, 255, 255, 0.3)'
     },
-    columnHeader: (accent) => ({
-        borderBottom: `3px solid ${accent}`,
-        padding: '0.95rem 1rem',
-        background: '#ffffff'
-    }),
-    cardsArea: {
-        padding: '1rem',
-        background: 'rgba(248, 250, 252, 0.95)',
-        minHeight: '67vh'
-    },
-    card: (accent) => ({
-        border: '1px solid #e7eaf0',
-        borderLeft: `4px solid ${accent}`,
-        borderRadius: '12px',
-        boxShadow: '0 2px 8px rgba(15, 23, 42, 0.06)',
-        cursor: 'pointer',
+    columnHeader: (accent, headingColor) => ({
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '1.5rem',
+        paddingBottom: '1.25rem',
+        borderBottom: `2px solid ${accent}22`,
         position: 'relative'
     }),
-    cardMeta: {
-        fontSize: '0.75rem',
-        color: '#6b7280'
+    columnTitle: (color) => ({
+        color: color,
+        fontSize: '1.4rem',
+        fontWeight: 800,
+        margin: 0,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em'
+    }),
+    badgePill: (bg, color) => ({
+        backgroundColor: bg,
+        color: color,
+        padding: '0.5rem 1.2rem',
+        borderRadius: '30px',
+        fontSize: '0.9rem',
+        fontWeight: 800,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+    }),
+    cardsArea: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1.25rem',
+        minHeight: '60vh'
     },
+    card: (accent) => ({
+        background: '#ffffff',
+        border: '1px solid #e5e7eb',
+        borderLeft: `6px solid ${accent}`,
+        borderRadius: '16px',
+        padding: '1.25rem',
+        position: 'relative',
+        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.02)',
+        cursor: 'pointer',
+        '&:hover': {
+            transform: 'translateY(-4px)',
+            boxShadow: '0 12px 24px rgba(0, 0, 0, 0.1)',
+            borderColor: accent
+        }
+    }),
+    cardTitle: {
+        fontSize: '1.15rem',
+        fontWeight: 700,
+        color: '#111827',
+        marginBottom: '0.25rem'
+    },
+    cardMeta: {
+        fontSize: '0.85rem',
+        color: '#6b7280',
+        fontWeight: 500,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.5rem'
+    },
+    cardSummary: {
+        marginTop: '0.75rem',
+        padding: '0.75rem',
+        background: '#f9fafb',
+        borderRadius: '12px',
+        fontSize: '0.95rem',
+        color: '#374151',
+        fontWeight: 600,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+    },
+    cardStatusBadge: (statusClass) => ({
+        padding: '4px 10px',
+        borderRadius: '8px',
+        fontSize: '0.75rem',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em'
+    }),
     emptyState: {
         textAlign: 'center',
-        color: '#64748b',
-        padding: '2.75rem 0',
-        opacity: 0.8
+        padding: '4rem 2rem',
+        color: '#9ca3af',
+        fontSize: '1.1rem',
+        fontWeight: 500,
+        fontStyle: 'italic'
     }
 };
 
 const modalStyles = {
     content: {
-        borderRadius: '16px',
-        border: '1px solid rgba(148, 163, 184, 0.35)',
-        boxShadow: '0 24px 60px rgba(15, 23, 42, 0.25)'
+        borderRadius: '24px',
+        border: 'none',
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+        overflow: 'hidden'
     },
     header: {
-        borderBottom: '1px solid #e5e7eb',
-        background: 'linear-gradient(135deg, #eff6ff, #eef2ff)'
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        color: '#ffffff',
+        border: 'none',
+        padding: '1.75rem 2rem'
     },
-    metaStrip: {
-        background: '#f8fafc',
-        border: '1px solid #e2e8f0',
-        borderRadius: '10px',
-        padding: '0.65rem 0.8rem'
+    body: {
+        padding: '2rem'
+    },
+    footer: {
+        padding: '1.5rem 2rem',
+        background: '#f9fafb',
+        borderTop: '1px solid #e5e7eb'
     }
 };
 
-const shortId = (id) => (id ? `${id.substring(0, 8)}...` : 'N/A');
+const shortId = (id) => (id ? `${id.substring(0, 8)}` : 'N/A');
 
 const formatDate = (dateString) => {
     if (!dateString) return 'Unknown date';
-    return new Date(dateString).toLocaleString('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
+    return new Date(dateString).toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', year: 'numeric',
         hour: '2-digit', minute: '2-digit', hour12: true
     });
 };
 
 const formatCardDate = (dateString) => {
     if (!dateString) return '-';
-    return new Date(dateString).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
+    return new Date(dateString).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
     });
 };
 
 const formatMoney = (value) => {
     const numeric = Number(value || 0);
-    return Number.isFinite(numeric)
-        ? numeric.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-        : '0.00';
+    return numeric.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const escapeHtml = (value) => String(value ?? '')
@@ -136,7 +215,6 @@ const escapeHtml = (value) => String(value ?? '')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-
 const isTestedCardReady = (item) => {
     const amount = Number(item?.total || 0);
     const mode = String(item?.mode_of_payment || '').trim();
@@ -145,11 +223,10 @@ const isTestedCardReady = (item) => {
 
 
 const getWeights = (item) => {
-    const total = Number(item.sample_weight || 0);
-    const sample = Number(item.test_weight || 0);
-    const normalizedSample = Number.isFinite(sample) && sample > 0 ? sample : total;
-    const net = Math.max(0, total - normalizedSample);
-    return { sample: normalizedSample, total, net };
+    const gross = Number(item.gross_weight || item.sample_weight || item.total_weight || 0);
+    const test = Number(item.test_weight || 0);
+    const net = item.net_weight !== undefined ? Number(item.net_weight) : Math.max(0, gross - test);
+    return { sample: test, total: gross, net };
 };
 
 const buildResultsItems = (items) => items.map((i) => ({
@@ -165,14 +242,9 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    const { addToast } = useToast();
 
-    useEffect(() => {
-        if (show && testId) {
-            fetchDetails();
-        }
-    }, [show, testId]);
-
-    const fetchDetails = async () => {
+    const fetchDetails = useCallback(async () => {
         setLoading(true);
         try {
             const res = await api.get(`/gold-tests/${testId}`);
@@ -182,12 +254,18 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
                 setItems(nextTest.items || []);
             }
         } catch (_error) {
-            toast.error('Failed to load test details');
+            addToast('Failed to load test details', 'error');
             onHide();
         } finally {
             setLoading(false);
         }
-    };
+    }, [testId, onHide]);
+
+    useEffect(() => {
+        if (show && testId) {
+            fetchDetails();
+        }
+    }, [show, testId, fetchDetails]);
 
     const handleFieldChange = (index, field, value) => {
         const next = [...items];
@@ -202,7 +280,7 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
 
     const saveResultsOnly = async () => {
         if (!hasValidPurity()) {
-            toast.error('Please enter valid purity for all items (0-100).');
+            addToast('Please enter valid purity for all items (0-100).', 'error');
             return false;
         }
 
@@ -221,11 +299,11 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
         try {
             const ok = await saveResultsOnly();
             if (!ok) return;
-            toast.success('Test result details saved. Card remains in Ongoing status.');
+            addToast('Test result details saved. Card remains in Ongoing status.', 'success');
             if (onUpdate) onUpdate();
             onHide();
         } catch (err) {
-            toast.error(err.response?.data?.error || 'Failed to save test details');
+            addToast(err.response?.data?.error || 'Failed to save test details', 'error');
         } finally {
             setSaving(false);
         }
@@ -238,11 +316,11 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
             const ok = await saveResultsOnly();
             if (!ok) return;
             await api.patch(`/gold-tests/${test.id}/status`, { status: 'IN_PROGRESS' });
-            toast.success('Success: Sample validated and moved to Tested status.');
+            addToast('Success: Sample validated and moved to Tested status.', 'success');
             if (onUpdate) onUpdate();
             onHide();
         } catch (err) {
-            toast.error(err.response?.data?.error || 'Failed to submit test details');
+            addToast(err.response?.data?.error || 'Failed to submit test details', 'error');
         } finally {
             setSubmitting(false);
         }
@@ -251,46 +329,46 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
     if (!test) return null;
 
     return (
-        <Modal show={show} onHide={onHide} size="lg" centered className="gt-results-modal" contentClassName="shadow-lg" style={{ backdropFilter: 'blur(2px)' }}>
-            <Modal.Header closeButton style={{ ...modalStyles.header, background: '#cbd5e1', borderBottom: '1px solid #b6c2d0' }}>
-                <Modal.Title>
+        <Modal show={show} onHide={onHide} size="lg" centered className="gt-results-modal" contentClassName="shadow-lg" style={{ backdropFilter: 'blur(5px)' }}>
+            <Modal.Header closeButton style={modalStyles.header}>
+                <Modal.Title className="fw-bold">
                     Add Test Results
-                    <span className="ms-2 text-muted h6 mb-0">({test.id})</span>
+                    <span className="ms-2 opacity-75 h6 mb-0">({test.id})</span>
                 </Modal.Title>
             </Modal.Header>
-            <Modal.Body style={{ ...modalStyles.content, border: 'none', borderTopLeftRadius: 0, borderTopRightRadius: 0, background: '#f8fafc' }}>
-                {loading ? <div className="text-center py-4"><Spinner animation="border" /></div> : (
+            <Modal.Body style={modalStyles.body}>
+                {loading ? <div className="text-center py-5"><Spinner animation="border" variant="primary" /></div> : (
                     <div>
-                        <div className="d-flex justify-content-between mb-3 gt-results-summary" style={{ ...modalStyles.metaStrip, background: '#ffffff', borderColor: '#d5dde8' }}>
-                            <span className="gt-label"><strong>Customer:</strong> {test.customer_name}</span>
-                            <span className="gt-label"><strong>Date:</strong> {new Date(test.created_at).toLocaleDateString()}</span>
+                        <div className="d-flex justify-content-between mb-4 p-3 rounded-4" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                            <span className="h6 mb-0"><strong>Customer:</strong> {test.customer_name}</span>
+                            <span className="h6 mb-0"><strong>Date:</strong> {new Date(test.created_at).toLocaleDateString()}</span>
                         </div>
 
-                        <div className="table-responsive">
+                        <div className="table-responsive rounded-4 overflow-hidden" style={{ border: '2px solid #f1f5f9' }}>
                             <table className="table align-middle mb-0 gt-results-table">
-                                <thead>
+                                <thead className="bg-light">
                                     <tr>
-                                        <th>Seq</th>
-                                        <th>Item</th>
-                                        <th>Sample Wt</th>
-                                        <th>Total Wt</th>
-                                        <th>Net Wt</th>
-                                        <th>Purity (%)</th>
-                                        <th>Returned</th>
+                                        <th className="px-3 py-3">Seq</th>
+                                        <th className="px-3 py-3">Item Details</th>
+                                        <th className="px-3 py-3">Sample Wt</th>
+                                        <th className="px-3 py-3">Total Wt</th>
+                                        <th className="px-3 py-3">Net Wt</th>
+                                        <th className="px-3 py-3">Purity (%)</th>
+                                        <th className="px-3 py-3 text-center">Returned</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {items.map((item, index) => (
                                         <tr key={item.id}>
-                                            <td>{index + 1}</td>
-                                            <td>
-                                                <strong>{item.item_type}</strong>
+                                            <td className="px-3">{index + 1}</td>
+                                            <td className="px-3">
+                                                <div className="fw-bold text-dark">{item.item_type}</div>
                                                 <div className="text-muted small">{item.item_no || item.item_number || '-'}</div>
                                             </td>
-                                            <td>{getWeights(item).sample}g</td>
-                                            <td>{getWeights(item).total}g</td>
-                                            <td>{getWeights(item).net}g</td>
-                                            <td>
+                                            <td className="px-3">{getWeights(item).sample}g</td>
+                                            <td className="px-3">{getWeights(item).total}g</td>
+                                            <td className="px-3">{getWeights(item).net}g</td>
+                                            <td className="px-3">
                                                 <input
                                                     type="number"
                                                     className="form-control form-control-sm gt-purity-input"
@@ -299,15 +377,17 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
                                                     step="0.01"
                                                     min="0.01"
                                                     max="100"
+                                                    style={{ borderRadius: '8px', fontWeight: 700, borderColor: '#d1d5db' }}
                                                 />
                                             </td>
-                                            <td className="text-center">
+                                            <td className="text-center px-3">
                                                 <div className="form-check d-flex justify-content-center">
                                                     <input
-                                                        className="form-check-input gt-check"
+                                                        className="form-check-input"
                                                         type="checkbox"
                                                         checked={!!item.returned}
                                                         onChange={(e) => handleFieldChange(index, 'returned', e.target.checked)}
+                                                        style={{ width: '1.2rem', height: '1.2rem', cursor: 'pointer' }}
                                                     />
                                                 </div>
                                             </td>
@@ -319,52 +399,33 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
                     </div>
                 )}
             </Modal.Body>
-            <Modal.Footer className="bg-light border-top-0 d-flex justify-content-between gt-results-footer">
-                <Button variant="secondary" onClick={onHide}>Close</Button>
+            <Modal.Footer style={modalStyles.footer}>
+                <Button variant="outline-secondary" onClick={onHide} className="px-4 fw-bold" style={{ borderRadius: '12px' }}>Close</Button>
                 <div className="d-flex gap-2">
-                    <Button variant="outline-primary" onClick={handleSave} disabled={saving || submitting || loading}>
-                        {saving ? <Spinner size="sm" animation="border" /> : <><FaSave className="me-2" />Save</>}
+                    <Button variant="outline-primary" onClick={handleSave} disabled={saving || submitting || loading} className="px-3 fw-bold" style={{ borderRadius: '12px' }}>
+                        {saving ? <Spinner size="sm" animation="border" /> : <><FaSave className="me-2" />Draft Save</>}
                     </Button>
-                    <Button variant="success" onClick={handleSubmit} disabled={saving || submitting || loading}>
-                        {submitting ? <Spinner size="sm" animation="border" /> : <><FaCheckCircle className="me-2" />Submit</>}
+                    <Button variant="success" onClick={handleSubmit} disabled={saving || submitting || loading} className="px-4 fw-bold" style={{ borderRadius: '12px' }}>
+                        {submitting ? <Spinner size="sm" animation="border" /> : <><FaCheckCircle className="me-2" />Submit Results</>}
                     </Button>
                 </div>
             </Modal.Footer>
             <style>{`
                 .gt-results-modal .modal-content {
-                    border-radius: 12px;
+                    border-radius: 24px;
+                    border: none;
                     overflow: hidden;
                 }
-                .gt-results-modal .modal-header .btn-close {
-                    opacity: 0.85;
-                }
-                .gt-results-modal .gt-results-summary .gt-label {
-                    font-size: 1.05rem;
-                    color: #111827;
-                }
-                .gt-results-modal .gt-results-table thead th {
-                    font-size: 0.82rem;
+                .gt-results-table thead th {
+                    font-size: 0.75rem;
                     text-transform: uppercase;
-                    letter-spacing: 0.02em;
-                    color: #6b7280;
-                    background: #f1f5f9;
-                    border-bottom: 1px solid #dbe3ee;
+                    letter-spacing: 0.05em;
+                    color: #64748b;
+                    font-weight: 800;
                 }
-                .gt-results-modal .gt-results-table td {
-                    vertical-align: middle;
-                    border-color: #e4e9f2;
-                }
-                .gt-results-modal .gt-purity-input {
-                    max-width: 150px;
-                    border-radius: 8px;
-                    font-weight: 600;
-                }
-                .gt-results-modal .gt-check {
-                    width: 1.1rem;
-                    height: 1.1rem;
-                }
-                .gt-results-modal .gt-results-footer .btn {
-                    min-width: 116px;
+                .gt-results-table td {
+                    padding: 1rem 0.5rem;
+                    color: #475569;
                     font-weight: 600;
                 }
             `}</style>
@@ -373,16 +434,11 @@ const UpdatePurityModal = ({ show, onHide, testId, onUpdate }) => {
 };
 
 const CompletedDetailsModal = ({ show, onHide, testId }) => {
+    const { addToast } = useToast();
     const [test, setTest] = useState(null);
     const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        if (show && testId) {
-            fetchDetails();
-        }
-    }, [show, testId]);
-
-    const fetchDetails = async () => {
+    const fetchDetails = useCallback(async () => {
         setLoading(true);
         try {
             const res = await api.get(`/gold-tests/${testId}`);
@@ -390,12 +446,18 @@ const CompletedDetailsModal = ({ show, onHide, testId }) => {
                 setTest(res.data.data);
             }
         } catch (_err) {
-            toast.error('Failed to load completed details');
+            addToast('Failed to load completed details', 'error');
             onHide();
         } finally {
             setLoading(false);
         }
-    };
+    }, [testId, onHide]);
+
+    useEffect(() => {
+        if (show && testId) {
+            fetchDetails();
+        }
+    }, [show, testId, fetchDetails]);
 
     const handleCopy = async () => {
         if (!test) return;
@@ -436,9 +498,9 @@ const CompletedDetailsModal = ({ show, onHide, testId }) => {
                 document.body.removeChild(textarea);
             }
 
-            toast.success('Completed details copied to clipboard');
+            addToast('Completed details copied to clipboard', 'success');
         } catch (_err) {
-            toast.error('Unable to copy completed details');
+            addToast('Unable to copy completed details', 'error');
         }
     };
 
@@ -556,11 +618,13 @@ const CompletedDetailsModal = ({ show, onHide, testId }) => {
 };
 
 const GoldTest = () => {
+    const { addToast } = useToast();
     const [columns, setColumns] = useState({
         TODO: [],
         IN_PROGRESS: [],
         DONE: []
     });
+    const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(false);
     const [batchMoving, setBatchMoving] = useState(false);
     const [showModal, setShowModal] = useState(false);
@@ -569,18 +633,18 @@ const GoldTest = () => {
     const [completedModalTestId, setCompletedModalTestId] = useState(null);
     const [draggedItem, setDraggedItem] = useState(null);
 
-    const fetchColumnData = async (status) => {
+    const fetchColumnData = useCallback(async (status) => {
         try {
-            const res = await api.get(`/gold-tests?status=${status}&limit=100`);
+            const res = await api.get(`/gold-tests?status=${status}&limit=100&search=${searchTerm}`);
             return res.data.success ? res.data.data : [];
         } catch (error) {
             console.error(`Error fetching ${status}:`, error);
-            toast.error(`Failed to load ${status} items`);
+            addToast(`Failed to load ${status} items`, 'error');
             return [];
         }
-    };
+    }, [searchTerm, addToast]);
 
-    const loadBoard = async () => {
+    const loadBoard = useCallback(async () => {
         setLoading(true);
         try {
             const [todo, inProgress, done] = await Promise.all([
@@ -596,11 +660,11 @@ const GoldTest = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [fetchColumnData]);
 
     useEffect(() => {
         loadBoard();
-    }, []);
+    }, [loadBoard]);
 
     const handleCardOpen = (item) => {
         if (item.status === 'TODO') {
@@ -627,7 +691,7 @@ const GoldTest = () => {
                     return Number.isFinite(p) && p > 0 && p <= 100;
                 });
                 if (!hasPurity) {
-                    toast.info('Add test results before moving to Tested.');
+                    addToast('Add test results before moving to Tested.', 'info');
                     setSelectedTestId(draggedItem.id);
                     return;
                 }
@@ -637,7 +701,7 @@ const GoldTest = () => {
                 const amount = Number(draggedItem.total || 0);
                 const mode = (draggedItem.mode_of_payment || '').trim();
                 if (!(Number.isFinite(amount) && amount > 0 && mode)) {
-                    toast.info('Add payment details in Tested status before moving to Completed.');
+                    addToast('Add payment details in Tested status before moving to Completed.', 'info');
                     setPaymentModalTestId(draggedItem.id);
                     return;
                 }
@@ -649,15 +713,15 @@ const GoldTest = () => {
                     mode_of_payment: mode,
                     weight_loss: 0
                 });
-                toast.success('Moved to Completed');
+                addToast('Moved to Completed', 'success');
             } else {
                 await api.patch(`/gold-tests/${draggedItem.id}/status`, { status: targetStatus });
-                toast.success(`Moved to ${STATUS_COLUMNS.find((x) => x.id === targetStatus)?.label || targetStatus}`);
+                addToast(`Moved to ${STATUS_COLUMNS.find((x) => x.id === targetStatus)?.label || targetStatus}`, 'success');
             }
 
             await loadBoard();
         } catch (err) {
-            toast.error(err.response?.data?.error || 'Move failed');
+            addToast(err.response?.data?.error || 'Move failed', 'error');
         } finally {
             setDraggedItem(null);
         }
@@ -666,7 +730,7 @@ const GoldTest = () => {
     const handleBatchTransferTested = async () => {
         const testedCards = columns.IN_PROGRESS || [];
         if (testedCards.length === 0) {
-            toast.info('No samples in Tested status to transfer');
+            addToast('No samples in Tested status to transfer', 'info');
             return;
         }
 
@@ -676,7 +740,7 @@ const GoldTest = () => {
         });
 
         if (eligible.length === 0) {
-            toast.info('No eligible samples ready for completion. Add payment details first.');
+            addToast('No eligible samples ready for completion. Add payment details first.', 'info');
             return;
         }
 
@@ -706,117 +770,135 @@ const GoldTest = () => {
         await loadBoard();
         setBatchMoving(false);
 
-        toast.success(`${successCount} sample(s) moved to Completed${pendingCount > 0 ? `, ${pendingCount} remain in Tested` : ''}`);
+        addToast(`${successCount} sample(s) moved to Completed${pendingCount > 0 ? `, ${pendingCount} remain in Tested` : ''}`, 'success');
     };
 
     return (
         <Container fluid style={boardStyles.page}>
-            <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-                <div>
-                    <h2 style={boardStyles.headerTitle}>Gold Testing Kanban</h2>
-                    <p style={boardStyles.headerSub}>Track samples across Ongoing, Tested, and Completed stages.</p>
-                </div>
-                <div className="d-flex gap-2 flex-wrap">
+            <div style={boardStyles.headerWrap}>
+                <h1 style={boardStyles.headerTitle}>Gold Testing Kanban</h1>
+                <p style={boardStyles.headerSub}>
+                    Streamline your laboratory workflow with real-time tracking of gold samples from intake to final analysis.
+                </p>
+
+                <div className="d-flex justify-content-center gap-3 mt-4">
                     <Button
                         variant="light"
-                        className="d-flex align-items-center gap-2"
+                        className="btn-glass d-flex align-items-center gap-2"
                         onClick={handleBatchTransferTested}
                         disabled={batchMoving}
+                        style={{ border: '2px solid white', borderRadius: '12px', padding: '0.8rem 1.5rem', fontWeight: 700 }}
                     >
                         {batchMoving ? <Spinner animation="border" size="sm" /> : <FaCheckDouble />}
-                        Move Tested Completed
+                        Batch Move Tested
                     </Button>
                     <Button
                         variant="light"
-                        className="d-flex align-items-center gap-2"
+                        className="btn-glass d-flex align-items-center gap-2"
                         onClick={loadBoard}
                         disabled={loading}
+                        style={{ border: '2px solid white', borderRadius: '12px', padding: '0.8rem 1.5rem', fontWeight: 700 }}
                     >
                         {loading ? <Spinner animation="border" size="sm" /> : <FaSync />}
-                        Refresh
+                        Refresh Board
                     </Button>
-                    <Button variant="primary" onClick={() => setShowModal(true)}>
-                        <FaPlus className="me-2" /> New Sample
+                    <Button
+                        variant="primary"
+                        onClick={() => setShowModal(true)}
+                        style={{ background: '#ffffff', color: '#667eea', border: 'none', borderRadius: '12px', padding: '0.8rem 2rem', fontWeight: 800, boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
+                    >
+                        <FaPlus className="me-2" /> New Sample Entry
                     </Button>
+                </div>
+
+                <div className="mt-4 mx-auto" style={{ maxWidth: '600px' }}>
+                    <div className="input-group input-group-lg shadow-lg overflow-hidden" style={{ borderRadius: '16px' }}>
+                        <span className="input-group-text border-0 bg-white"><FaSync className={loading ? "fa-spin" : ""} /></span>
+                        <input
+                            type="text"
+                            className="form-control border-0 py-3"
+                            placeholder="Search by ID, Customer Name or Phone..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            style={{ fontSize: '1.1rem', fontWeight: 500 }}
+                        />
+                        {searchTerm && (
+                            <button className="btn btn-white border-0 text-danger" onClick={() => setSearchTerm('')}>×</button>
+                        )}
+                    </div>
                 </div>
             </div>
 
-            <Row className="g-3">
+            <Row className="g-4">
                 {STATUS_COLUMNS.map((col) => {
                     const items = columns[col.id] || [];
                     return (
-                        <Col key={col.id} lg={4} md={6}>
+                        <Col key={col.id} lg={4}>
                             <div style={boardStyles.columnWrap}>
-                                <div className="d-flex justify-content-between align-items-center" style={boardStyles.columnHeader(col.accent)}>
-                                    <h6 className="mb-0 fw-bold" style={{ color: col.headingColor }}>{col.label}</h6>
-                                    <Badge pill style={{ backgroundColor: col.chipBg, color: col.chipColor, fontWeight: 700 }}>
-                                        {items.length}
-                                    </Badge>
+                                <div style={boardStyles.columnHeader(col.accent, col.headingColor)}>
+                                    <h3 style={boardStyles.columnTitle(col.headingColor)}>{col.label}</h3>
+                                    <div style={boardStyles.badgePill(col.chipBg, col.chipColor)}>
+                                        {items.length} SAMPLES
+                                    </div>
                                 </div>
 
-                                <div style={boardStyles.cardsArea}>
-                                    <div
-                                        onDragOver={(e) => e.preventDefault()}
-                                        onDrop={() => handleDropToColumn(col.id)}
-                                        style={{ minHeight: '1px' }}
-                                    />
+                                <div
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={() => handleDropToColumn(col.id)}
+                                    style={boardStyles.cardsArea}
+                                >
                                     {items.map((item) => (
                                         <div
                                             key={item.id}
-                                            className="mb-3"
                                             style={boardStyles.card(col.accent)}
                                             onClick={() => handleCardOpen(item)}
                                             draggable
                                             onDragStart={() => setDraggedItem(item)}
+                                            className="kanban-card-hover"
                                         >
                                             {item.status === 'IN_PROGRESS' && isTestedCardReady(item) && (
                                                 <div
-                                                    title="Ready"
+                                                    title="Pass / Ready for Completion"
                                                     style={{
                                                         position: 'absolute',
-                                                        top: 10,
-                                                        right: 10,
-                                                        width: 22,
-                                                        height: 22,
+                                                        top: '1rem',
+                                                        right: '1rem',
+                                                        width: '28px',
+                                                        height: '28px',
                                                         borderRadius: '50%',
-                                                        background: '#3b82f6',
+                                                        background: '#10b981',
                                                         color: '#ffffff',
                                                         display: 'flex',
                                                         alignItems: 'center',
                                                         justifyContent: 'center',
-                                                        fontSize: '0.75rem',
-                                                        fontWeight: 700,
-                                                        boxShadow: '0 2px 8px rgba(59,130,246,0.35)'
+                                                        fontSize: '0.9rem',
+                                                        boxShadow: '0 4px 10px rgba(16,185,129,0.3)'
                                                     }}
                                                 >
-                                                    ?
+                                                    ✓
                                                 </div>
                                             )}
-                                            <div className="p-3">
-                                                <div className="d-flex justify-content-between align-items-start gap-2">
-                                                    <div>
-                                                        <div className="fw-semibold text-dark" style={{ fontSize: '1.05rem', lineHeight: 1.2 }} title={item.customer_name || ''}>
-                                                            {item.customer_name || 'Unknown Customer'}
-                                                        </div>
-                                                        <div style={boardStyles.cardMeta}>
-                                                            {item.auto_number || shortId(item.id)}
-                                                        </div>
-                                                    </div>
-                                                    <small className="text-muted" style={{ fontSize: '0.92rem', whiteSpace: 'nowrap' }}>
-                                                        {formatCardDate(item.created_at)}
-                                                    </small>
-                                                </div>
 
-                                                <div style={{ marginTop: '0.55rem', color: '#4b5563', fontSize: '1.05rem' }}>
-                                                    {(item.item_count || 0)} {(item.item_count || 0) === 1 ? 'sample' : 'samples'}
-                                                </div>
+                                            <div style={boardStyles.cardTitle}>
+                                                {item.customer_name || 'Anonymous Customer'}
+                                            </div>
+
+                                            <div style={boardStyles.cardMeta}>
+                                                <span style={{ color: '#94a3b8' }}>ID:</span> {item.auto_number || shortId(item.id)}
+                                                <span style={{ margin: '0 0.5rem', color: '#e2e8f0' }}>|</span>
+                                                <span style={{ color: '#94a3b8' }}>DATE:</span> {formatCardDate(item.created_at)}
+                                            </div>
+
+                                            <div style={boardStyles.cardSummary}>
+                                                <span>{item.item_count || 0} ITEMS</span>
+                                                <span style={{ color: col.accent }}>TOTAL: {item.total_weight || '0.00'}g</span>
                                             </div>
                                         </div>
                                     ))}
 
                                     {items.length === 0 && !loading && (
                                         <div style={boardStyles.emptyState}>
-                                            <small>No items in {col.label}</small>
+                                            No samples currently in {col.label.toLowerCase()}
                                         </div>
                                     )}
                                 </div>
@@ -825,6 +907,23 @@ const GoldTest = () => {
                     );
                 })}
             </Row>
+
+            <style>{`
+                .btn-glass {
+                    background: rgba(255, 255, 255, 0.15) !important;
+                    color: white !important;
+                    backdrop-filter: blur(5px);
+                    transition: all 0.3s ease;
+                }
+                .btn-glass:hover {
+                    background: rgba(255, 255, 255, 0.25) !important;
+                    transform: translateY(-2px);
+                }
+                .kanban-card-hover:hover {
+                    transform: translateY(-5px);
+                    box-shadow: 0 15px 30px rgba(0,0,0,0.1) !important;
+                }
+            `}</style>
 
             <NewGoldTestModal
                 show={showModal}

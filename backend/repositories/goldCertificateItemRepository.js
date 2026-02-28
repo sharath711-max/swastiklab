@@ -8,6 +8,12 @@ class GoldCertificateItemRepository {
      */
     createItem(certificateId, clientInput) {
         return transaction(() => {
+            // 0. CHECK STATUS (IMMUTABILITY)
+            const parent = db.prepare('SELECT status FROM gold_certificate WHERE id = ?').get(certificateId);
+            if (parent && parent.status === 'DONE') {
+                throw new Error('Cannot add items to a DONE certificate');
+            }
+
             // 1. GENERATE IDs
             // Use standard GCI format if possible, or UUID fallback
             const itemId = `GCI${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -89,6 +95,15 @@ class GoldCertificateItemRepository {
      */
     updateItem(itemId, updates) {
         return transaction(() => {
+            // 0. CHECK STATUS (IMMUTABILITY)
+            const currentItem = db.prepare('SELECT gold_certificate_id FROM gold_certificate_item WHERE id = ?').get(itemId);
+            if (!currentItem) throw new Error(`Item ${itemId} not found`);
+
+            const parent = db.prepare('SELECT status FROM gold_certificate WHERE id = ?').get(currentItem.gold_certificate_id);
+            if (parent && parent.status === 'DONE') {
+                throw new Error('Cannot edit items of a DONE certificate');
+            }
+
             // Get current item
             const current = db.prepare(`
                 SELECT * FROM gold_certificate_item WHERE id = ?
@@ -158,6 +173,12 @@ class GoldCertificateItemRepository {
 
             if (!item) {
                 throw new Error(`Item ${itemId} not found`);
+            }
+
+            // CHECK STATUS (IMMUTABILITY)
+            const parent = db.prepare('SELECT status FROM gold_certificate WHERE id = ?').get(item.gold_certificate_id);
+            if (parent && parent.status === 'DONE') {
+                throw new Error('Cannot delete items from a DONE certificate');
             }
 
             db.prepare(`

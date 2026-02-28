@@ -5,22 +5,33 @@ const CertificateCalculationService = require('../services/certificateCalculatio
 
 class SilverCertificateItemRepository {
     /**
+     * Internal helper to check if certificate is immutable
+     */
+    _checkImmutability(certificateId) {
+        const parent = db.prepare('SELECT status FROM silver_certificate WHERE id = ?').get(certificateId);
+        if (parent && parent.status === 'DONE') {
+            throw new Error('409: Certificate is in DONE status and cannot be modified');
+        }
+    }
+
+    /**
      * Create a new silver certificate item
      */
     createItem(certificateId, clientInput) {
         return transaction(() => {
+            // 0. IMMUTABILITY CHECK
+            this._checkImmutability(certificateId);
+
             // 1. GENERATE IDs
             const itemId = `SCI${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
             // 2. CALCULATE
-            // CertificateService probably has calculateSilverItem, but let's make sure it handles what we need
-            // Or just do basic calculation here since Silver schema is simple
-            const calculated = CertificateService.calculateSilverItem(clientInput);
+            const calculated = CertificateCalculationService.calculateSilverItem(clientInput);
 
             // 3. GENERATE SEQUENCE NUMBERS
-            const count = db.prepare('SELECT COUNT(*) as c FROM silver_certificate_item WHERE silver_certificate_id = ?').get(certificateId).c;
+            const count = db.prepare('SELECT COUNT(*) as c FROM silver_certificate_item WHERE silver_certificate_id = ? AND deletedon IS NULL').get(certificateId).c;
             const itemNo = clientInput.item_no || `A${String(count + 1).padStart(3, '0')}`;
-            const certNum = clientInput.certificate_number || getNextSequence('silver_cert_seq');
+            const certNum = clientInput.certificate_number || `SC-${getNextSequence('silver_cert_seq')}`;
 
             // 4. INSERT
             db.prepare(`
@@ -28,28 +39,26 @@ class SilverCertificateItemRepository {
                     id, silver_certificate_id, 
                     certificate_number, item_no, item_type,
                     gross_weight, test_weight, net_weight,
-                    purity, item_total,
+                    purity, fine_weight, item_total,
                     returned,
                     created
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 itemId, certificateId,
                 certNum,
                 itemNo,
-                clientInput.item_name || clientInput.item_type || 'Silver Item',
+                calculated.item_name,
                 calculated.gross_weight,
                 calculated.test_weight,
                 calculated.net_weight,
                 calculated.purity,
-                calculated.item_total,
+                calculated.fine_weight,
+                clientInput.item_total || 0,
                 calculated.is_returned ? 1 : 0,
                 new Date().toISOString()
             );
 
             // 5. UPDATE PARENT TOTALS
-            // Use logical service to update parent totals - assuming we can reuse updateCertificateTotals
-            // even though it was designed for Gold. 
-            // We modified CertificateCalculationService to handle SCR prefix!
             CertificateCalculationService.updateCertificateTotals(certificateId, db);
 
             return {
@@ -80,24 +89,23 @@ class SilverCertificateItemRepository {
         `).all(certificateId);
     }
 
-    /**
-     * Update item
-     */
     updateItem(itemId, updates) {
         return transaction(() => {
             const current = db.prepare(`SELECT * FROM silver_certificate_item WHERE id = ?`).get(itemId);
             if (!current) throw new Error(`Item ${itemId} not found`);
+
+            // Check immutability
+            this._checkImmutability(current.silver_certificate_id);
 
             const merged = {
                 gross_weight: updates.gross_weight ?? current.gross_weight,
                 test_weight: updates.test_weight ?? current.test_weight,
                 purity: updates.purity ?? current.purity,
                 is_returned: updates.is_returned ?? (current.returned === 1),
-                item_total: updates.item_total ?? current.item_total,
                 item_name: updates.item_name ?? updates.item_type ?? current.item_type
             };
 
-            const calculated = CertificateService.calculateSilverItem(merged);
+            const calculated = CertificateCalculationService.calculateSilverItem(merged);
 
             db.prepare(`
                 UPDATE silver_certificate_item
@@ -107,16 +115,18 @@ class SilverCertificateItemRepository {
                     test_weight = ?,
                     net_weight = ?,
                     purity = ?,
+                    fine_weight = ?,
                     item_total = ?,
                     returned = ?
                 WHERE id = ?
             `).run(
-                merged.item_name,
+                calculated.item_name,
                 calculated.gross_weight,
                 calculated.test_weight,
                 calculated.net_weight,
                 calculated.purity,
-                calculated.item_total, // Silver might allow manual override or simple calc
+                calculated.fine_weight,
+                updates.item_total ?? current.item_total,
                 calculated.is_returned ? 1 : 0,
                 itemId
             );
@@ -127,13 +137,13 @@ class SilverCertificateItemRepository {
         })();
     }
 
-    /**
-     * Delete item
-     */
     deleteItem(itemId) {
         return transaction(() => {
             const item = db.prepare(`SELECT silver_certificate_id FROM silver_certificate_item WHERE id = ?`).get(itemId);
             if (!item) throw new Error(`Item ${itemId} not found`);
+
+            // Check immutability
+            this._checkImmutability(item.silver_certificate_id);
 
             db.prepare(`UPDATE silver_certificate_item SET deletedon = ? WHERE id = ?`)
                 .run(new Date().toISOString(), itemId);
